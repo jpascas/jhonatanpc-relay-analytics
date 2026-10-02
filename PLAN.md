@@ -34,6 +34,8 @@ Implementation plan, written before any code. Every number links to its query an
 6. Is `duration_seconds` trustworthy, given that missed calls have durations ([E-17](EVIDENCE.md#e-17))? [No: not used, D10.]
 7. What should an account with no data see? [An empty result, D11.]
 8. Is "above typical" something to act on, or only "below"? [Both are shown, D6.]
+9. When a location's typical volume is low (m<5) but last week jumped, is it "Above" or "Low volume"? Future option: show both ("Above · Low volume"). [Above wins, D17; affects 6/Site M and 6/Site O in week 2026-07-20, [G-04](EVIDENCE.md#g-04).]
+10. Should the minimum gap scale with volume (flag only if |v−m| ≥ k·√m) instead of the fixed max(3, 0.3m)? See C5. [No: D6 stays, with values configurable via D23.]
 
 ## 4. Decisions
 | # | Decision | Reason | Trade-off considered |
@@ -43,20 +45,29 @@ Implementation plan, written before any code. Every number links to its query an
 | D3 | Baseline = 8 complete weeks before the reported week; 0-event weeks count as 0 | [E-03](EVIDENCE.md#e-03) (24–25 weeks available), [E-13](EVIDENCE.md#e-13) | 8 weeks reacts to trends faster than a longer window, but is noisier |
 | D4 | Median with P25–P75 range (PERCENTILE.INC, linear interpolation) | [E-12](EVIDENCE.md#e-12) spike | Ignores the size of tail weeks; P25/P75 come from only 8 points |
 | D5 | Location: status on total only, per-type counts shown without status. Account: status on total, each type, missed-call rate | [E-11](EVIDENCE.md#e-11) cell sizes | Per-type issues at one location are not flagged |
-| D6 | Count status: Below if v<p25 AND m−v ≥ max(3, 0.3m); Above if v>p75 AND v−m ≥ max(3, 0.3m); Low volume if m<5; else Typical | Needs both a range breach and a minimum absolute gap | Thresholds are fixed and not configurable |
-| D7 | Missed-call rate = missed ÷ known-outcome calls; computed only in weeks with ≥20 known-outcome calls; flagged if outside [p25,p75] AND ≥10 pp from the median | Avoids rates computed from tiny denominators | Most accounts get no rate (see Challenges C2) |
+| D6 | Count status, evaluated in this order (D17): Below if v<p25 AND m−v ≥ max(3, 0.3m); Above if v>p75 AND v−m ≥ max(3, 0.3m); Low volume if m<5; else Typical | Needs both a range breach and a minimum absolute gap | Default values; configurable globally via D23 |
+| D7 | Missed-call rate = missed ÷ known-outcome calls; computed only in weeks with ≥20 known-outcome calls; flagged if outside [p25,p75] AND ≥10 pp from the median; baseline per D21 | Avoids rates computed from tiny denominators | Most accounts get no rate (see Challenges C2) |
 | D8 | Dedup on (account_id, location, event_type, occurred_at, duration_seconds, outcome) via a SQL view; seed never modified | [E-18](EVIDENCE.md#e-18) | A legitimate repeat event in the same second would be dropped |
 | D9 | NULL outcome = unknown, never missed or connected, shown as a count | [E-16](EVIDENCE.md#e-16) | Rate denominators shrink by about 3% |
 | D10 | `duration_seconds` unused | [E-17](EVIDENCE.md#e-17) | No call-length insight |
 | D11 | A location with 0 events in the reported week still appears, with 0; account 20 → HTTP 200 with an empty result | [E-13](EVIDENCE.md#e-13), [E-19](EVIDENCE.md#e-19) | — |
 | D12 | Location key = (account_id, location) | [E-08](EVIDENCE.md#e-08) | — |
-| D13 | .NET 8 Web API; EF Core migrations (schema + dedup view); separate idempotent seed step; aggregation in explicit SQL; baseline logic in a pure C# class; SQL Server in Docker (SQLite if setup exceeds 30 min); Angular with UI state in URL query params | Testability: SQL is checked against the golden values, logic is unit-tested without a DB | SQL Server cannot convert IANA zones natively (see O1) |
+| D13 | .NET 8 Web API; EF Core migrations (schema + dedup view); separate idempotent seed step; aggregation in explicit SQL; baseline logic in a pure C# class; SQL Server in Docker (SQLite if setup exceeds 30 min); Angular with UI state in URL query params | Testability: SQL is checked against the golden values, logic is unit-tested without a DB | SQL Server cannot convert IANA zones natively (resolved by D15) |
 | D14 | Out of scope: auth, alerts, forecasting, visual polish, CI, week picker | Ticket and brief | — |
+| D15 | Week edges: C# converts each account's local Monday 00:00 to UTC with `TimeZoneInfo` (IANA ids) and passes `[start_utc, end_utc)` pairs to SQL as parameters; SQL never converts zones | No dependency on Windows zone names; SQL stays plain range filters | Edge computation lives outside SQL, so the SQL alone can't be run without the C# parameters |
+| D16 | Approved packages (CLAUDE.md): EF Core SQL Server provider, EF Core Design, EF Core SQLite provider (fallback only), `dotnet-ef` tool, xUnit, Angular CLI and runtime npm packages; `tzdata` (Python) as a dev-only tool for re-running [EVIDENCE.md](EVIDENCE.md) | Approved by the owner | Anything else still needs approval |
+| D17 | D6 precedence: Below/Above are tested before Low volume | Owner choice | A location with m<5 can show Above (6/Site M, 6/Site O, [G-04](EVIDENCE.md#g-04)); raised to product as Q9 |
+| D18 | Account id not in `accounts` → 404; existing account with no events (20) → 200 with an empty result | REST semantics: the resource does not exist vs. exists with no data | Two different empty states for the UI |
+| D19 | API unreachable or 5xx → page shows an error message, no numbers, and a Retry button that repeats the same request | Better experience than a dead end | No automatic retry |
+| D20 | Location row order: Below (largest m−v first), then Above (largest v−m first), then Low volume, then Typical; ties by location name | Answers "which site do I call first?" | Above locations are below the fold when there are many Below |
+| D21 | Missed-call baseline uses only baseline weeks with ≥20 known-outcome calls, and needs ≥5 of them; otherwise no rate status, with a reason: `reported_week_too_few_calls` (n of 20) or `baseline_too_few_weeks` (n of 5) | With 5 values P25/P75 fall on the 2nd and 4th sorted values; gives 4 accounts a rate instead of 3 ([G-05](EVIDENCE.md#g-05)) | The baseline describes the busier weeks only |
+| D22 | Location list = every (account_id, location) with any event ever; locations with 0 in all 9 weeks still appear with 0 | Don't hide locations | Closed sites would stay listed (none in the seed, [E-10](EVIDENCE.md#e-10)) |
+| D23 | All thresholds live in a `StatusThresholds` record bound from `appsettings.json` (`StatusRules` section) via `IOptions`, validated at startup, passed into the pure `BaselineEvaluator`, and echoed in the API response. Defaults: baseline weeks 8, min gap 3, relative gap 0.3, low-volume median 5, min known calls 20, rate gap 10 pp, min rate baseline weeks 5 | Thresholds tunable without code changes; UI can explain a status | Global only: no per-account overrides (needs auth, deferred) |
 
 ## 5. Brief
 **Goal:** one API call and one page. For an account and its reported week, show each location's total versus its baseline median and P25–P75 range, with a status. Show account-level statuses for the total, each event type, and the missed-call rate.
 
-**Constraints:** D1–D14. No new NuGet or npm packages without approval (CLAUDE.md; list in O2). `seed.sql` and `schema.sql` are untouched.
+**Constraints:** D1–D23. Only the packages approved in D16; anything else needs approval (CLAUDE.md). `seed.sql` and `schema.sql` are untouched.
 
 **Edge cases mapped to this data**
 | Case | In this data | Required behaviour (testable) |
@@ -69,11 +80,13 @@ Implementation plan, written before any code. Every number links to its query an
 | Duplicate | 12 pairs ([E-18](EVIDENCE.md#e-18)); account 1 Site C week 2026-07-06: raw 5 → 4 [G-03](EVIDENCE.md#g-03) | All counts read the dedup view; the baseline value for that week is 4 |
 | Malformed | 240 calls with NULL outcome ([E-16](EVIDENCE.md#e-16)); missed calls with durations ([E-17](EVIDENCE.md#e-17)) | NULLs are counted in `unknownOutcomeCalls` and excluded from the rate; duration never read. Non-integer account id → 400 (model binding) |
 | Unauthorised | Auth out of scope (D14) | Any caller can read any account; documented in README as a known gap |
-| Offline | API unreachable from Angular | See O5 |
+| Offline | API unreachable from Angular | D19: error message, no numbers, Retry button; with the API stopped, Retry repeats `GET /api/accounts/{id}/weekly-status` once per click |
 | Concurrent | Read-only endpoint; seed step may be re-run | Running the seed step twice leaves 20 accounts and 12,626 events (idempotent) |
-| Unknown account | id not in `accounts` (e.g. 999) | See O4 |
+| Unknown account | id not in `accounts` (e.g. 999) | D18: 404; UI shows "Account not found" |
+| Sparse calls | Account 5: 18 known calls in week 2026-07-20; account 2: 3 qualifying baseline weeks ([G-05](EVIDENCE.md#g-05)) | D21: no rate status; reason `reported_week_too_few_calls` (18 of 20) for account 5, `baseline_too_few_weeks` (3 of 5) for account 2 |
+| Bad config | `StatusRules` value out of range | D23: app refuses to start, naming the setting (relative gap outside 0–1, baseline weeks < 4, min rate baseline weeks > baseline weeks) |
 
-**The check:** API output for account 1 and for account 6 Site C equals §6. Unit tests on the baseline class pass with the §6(b) and §10 vectors. The page at `?account=6` lists 15 locations, each with value, range and status.
+**The check:** API output for account 1 and for account 6 Site C equals §6. Unit tests on the baseline class pass with the §6(b) and §10 vectors. The page at `?account=6` lists 15 locations in D20 order, each with value, range and status.
 
 ## 6. Golden values for tests (dedup applied; raw = dedup in both cases)
 [G-01](EVIDENCE.md#g-01) **(a) Account 1 (America/Chicago), week 2026-07-20 = [2026-07-20 05:00, 2026-07-27 05:00) UTC:**
@@ -87,16 +100,16 @@ calls **34**, leads **12**, appointments **7**, total **53**.
 
 Queries and outputs: [G-01](EVIDENCE.md#g-01), [G-02](EVIDENCE.md#g-02). Week edges use fixed summer offsets, which are valid because all weeks from 2026-05-25 onward are after the 2026-03-08 DST change ([E-06](EVIDENCE.md#e-06)).
 
-## 7. Implementation slices (total 5 h 25 min)
+## 7. Implementation slices (total 5 h 45 min)
 | # | Built | Done when | Budget |
 |---|---|---|---|
-| S0 | Approval of the package list (O2); solution skeleton `api/`, `api.tests/`, `web/` | `dotnet build` succeeds; `ng version` runs | 20 min |
+| S0 | Solution skeleton `api/`, `api.tests/`, `web/` with the D16 packages only | `dotnet build` succeeds; `ng version` runs | 20 min |
 | S1 | SQL Server in Docker; EF Core migration for both tables and view `activity_events_dedup` | `dotnet ef database update` succeeds; if the container isn't serving within 30 min, switch to SQLite and record it under Plan changes | 45 min |
 | S2 | Idempotent seed step (runs `seed.sql` only when `accounts` is empty) | Run twice → `SELECT COUNT(*)` gives 20 accounts, 12,626 events, 12,614 rows in the view | 30 min |
-| S3 | `TimeProvider` registration (config `Clock:NowUtc`, default = MAX(occurred_at)); week calculator (IANA → UTC edges) | Unit tests: now 2026-07-27 22:20:34 → reported week 2026-07-20 for all 19 accounts; account 18 edges 2026-07-20 00:00/07-27 00:00 UTC, account 1 05:00/05:00 ([E-22](EVIDENCE.md#e-22)) | 30 min |
-| S4 | Pure `BaselineEvaluator`: PERCENTILE.INC, D6, D7 | Unit tests pass for §6(b) and every row in §10 | 45 min |
-| S5 | Explicit SQL weekly counts (9 weeks × location × type, zero-filled) + `GET /api/accounts/{id}/weekly-status` | `curl` for account 1 returns 34/12/7/53; account 6 Site C returns value 6, range 3.75–8.75, Typical; account 20 returns 200 with `[]` | 60 min |
-| S6 | Angular page: account from `?account=`, table of locations (value, range, status, per-type counts), account summary row | Load `?account=6` → 15 rows; reload keeps the account; account 20 shows the empty message | 75 min |
+| S3 | `TimeProvider` registration (config `Clock:NowUtc`, default = MAX(occurred_at)); week calculator: IANA zone → `[start_utc, end_utc)` for the reported week and its 8 baseline weeks (D15) | Unit tests: now 2026-07-27 22:20:34 → reported week 2026-07-20 for all 19 accounts; account 18 edges 2026-07-20 00:00/07-27 00:00 UTC, account 1 05:00/05:00 ([E-22](EVIDENCE.md#e-22)) | 30 min |
+| S4 | Pure `BaselineEvaluator`: PERCENTILE.INC, D6 + D17 order, D7 + D21 reasons; `StatusThresholds` options with startup validation (D23) | Unit tests pass for §6(b) and every row in §10; with min gap set to 4, 1/Site C (v=9, m=5.5) becomes Typical; relative gap 1.5 in config → startup fails naming `StatusRules:RelativeGap` | 65 min |
+| S5 | Explicit SQL weekly counts (9 weeks × location × type, zero-filled, D22 location list, UTC edge parameters from D15) + `GET /api/accounts/{id}/weekly-status` returning active thresholds | `curl` for account 1 returns 34/12/7/53; account 6 Site C returns value 6, range 3.75–8.75, Typical; account 20 returns 200 with `[]`; account 999 returns 404; account 5 returns rate reason `reported_week_too_few_calls` | 60 min |
+| S6 | Angular page: account from `?account=`, table of locations in D20 order (value, range, status, per-type counts), account summary row with rate reasons, error state with Retry (D19), not-found state (D18) | Load `?account=6` → 15 rows, Below rows first; reload keeps the account; account 20 shows the empty message; account 999 shows "Account not found"; API stopped → error + Retry | 75 min |
 | S7 | README: run steps, assumptions (§3), known gaps | Following the README on a clean clone reaches S6's result | 20 min |
 
 ## 8. Deferred
@@ -105,12 +118,17 @@ Queries and outputs: [G-01](EVIDENCE.md#g-01), [G-02](EVIDENCE.md#g-02). Week ed
 - Call duration metrics: duration does not depend on outcome ([E-17](EVIDENCE.md#e-17)).
 - Hour-of-day views: the UTC hour profile is the same in every timezone ([E-06](EVIDENCE.md#e-06)), so local hours are not credible.
 - Peer or industry comparison: the ticket says "typical for them".
+- Per-account threshold overrides: need storage and an admin screen, which needs auth (D14).
+- Thresholds in URL query parameters: rejected; any link viewer could change what "Below" means.
+- Volume-scaled gap (k·√m): pending product answer to Q10 (C5).
+- Combined status "Above · Low volume": pending product answer to Q9.
 
 ## 9. Challenges (decisions kept; evidence for review)
 - **C1, D6 flags a third of locations.** In week 2026-07-20, D6 gives 15 Above, 8 Below, 6 Low volume and 40 Typical out of 69 locations [G-04](EVIDENCE.md#g-04). Above flags fire on gaps as small as 3 events (e.g. 1/Site C: 9 vs median 5.5). "Which site to call first" may get lost among 23 flags.
-- **C2, D7 rarely produces a rate.** Only 5 of 19 accounts have ≥20 known-outcome calls in week 2026-07-20. 11 of 19 have 0 qualifying baseline weeks, and only 3 have all 8 [G-05](EVIDENCE.md#g-05). Most accounts get no missed-call status.
+- **C2, D7 rarely produces a rate.** Only 5 of 19 accounts have ≥20 known-outcome calls in week 2026-07-20. 11 of 19 have 0 qualifying baseline weeks, and only 3 have all 8 [G-05](EVIDENCE.md#g-05). Most accounts get no missed-call status. With D21 (≥5 qualifying weeks), accounts 1, 4, 6 and 12 get a rate, so 15 of 19 still don't; D21 makes the reason visible instead of a blank.
 - **C3, account-level appointment status is mostly Low volume.** 14 of 19 accounts are Low volume for appointments in week 2026-07-20 [G-05](EVIDENCE.md#g-05) ([E-11](EVIDENCE.md#e-11): mean 3.8 appointments per account-week).
-- **C4, the D6 order is ambiguous.** Low volume is listed after Below/Above. For 6/Site M (v=7, m=3.5) and 6/Site O (v=8, m=4.5), Above-first gives "Above" and Low-first gives "Low volume" [G-04](EVIDENCE.md#g-04). See O3.
+- **C4, the D6 order is ambiguous.** Low volume is listed after Below/Above. For 6/Site M (v=7, m=3.5) and 6/Site O (v=8, m=4.5), Above-first gives "Above" and Low-first gives "Low volume" [G-04](EVIDENCE.md#g-04). Resolved by D17 (Above-first); raised to product as Q9.
+- **C5, the fixed gap max(3, 0.3m) ignores natural variation at low volume.** A gap that scales with volume, |v−m| ≥ 2·√m, would make 1/Site C Typical (2·√5.5 ≈ 4.7 > gap 3.5) and 6/Site M Typical (2·√3.5 ≈ 3.7 > gap 3.5), using the [G-04](EVIDENCE.md#g-04) values. Its effect on all 69 locations has not been queried. Raised to product as Q10; D23 makes the current values tunable meanwhile.
 
 ## 10. Extra test vectors (rule D6; dedup; week 2026-07-20; baseline sorted; source [G-04](EVIDENCE.md#g-04))
 | Location | v | Baseline (sorted) | Status |
@@ -119,17 +137,10 @@ Queries and outputs: [G-01](EVIDENCE.md#g-01), [G-02](EVIDENCE.md#g-02). Week ed
 | 5 / Site B | 3 | 3,4,6,6,7,10,11,14 | Below |
 | 8 / Site A | 7 | 8,8,10,10,10,11,12,13 | Below |
 | 18 / Site A | 3 | 1,2,2,3,4,5,7,8 | Low volume |
-| 6 / Site M | 7 | 1,2,3,3,4,5,6,50 | depends on O3 |
+| 6 / Site M | 7 | 1,2,3,3,4,5,6,50 | Above (D17) |
 
-## 11. Open decisions (not chosen)
-- **O1, IANA week edges with SQL Server** (its `AT TIME ZONE` takes Windows zone names). (a) C# computes UTC edges per account with `TimeZoneInfo` and passes them to SQL as parameters; (b) map IANA to Windows names and bucket in SQL.
-- **O2, packages needing approval (CLAUDE.md).** EF Core provider + Design (+ the SQLite provider for the fallback), the `dotnet-ef` tool, a test framework (xUnit or MSTest), and the Angular CLI/runtime npm packages.
-- **O3, D6 precedence when m < 5.** (a) Below/Above win over Low volume; (b) Low volume wins.
-- **O4, account id not in `accounts`.** (a) 404; (b) 200 empty, the same as account 20.
-- **O5, Angular when the API is unreachable.** (a) error message with no numbers; (b) retry button plus error message.
-- **O6, row order on the page** (affects "which site to call first"). (a) Below first, then by m − v; (b) alphabetical; (c) by gap size, regardless of direction.
-- **O7, missed-call baseline when fewer than 8 weeks qualify (C2).** (a) use only the qualifying weeks, with a minimum N; (b) no rate status unless all 8 qualify.
-- **O8, location list source** (there is no locations table). (a) locations with any event in the 9-week window; (b) locations with any event ever. [E-10](EVIDENCE.md#e-10) shows no location starts or stops mid-range, so the seed gives the same result either way.
+## 11. Open decisions
+None. O1–O8 were resolved by the owner: O1 → D15, O2 → D16, O3 → D17 (+ Q9), O4 → D18, O5 → D19, O6 → D20, O7 → D21, O8 → D22. Threshold configurability → D23 (+ Q10, C5).
 
 ## Plan changes
 <!-- Changes made after coding starts: date, what changed, why. -->
