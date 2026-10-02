@@ -1,0 +1,28 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Relay.Api", "Relay.Api\Relay.Api.csproj", "{5FFCEA1F-D5A6-4540-8943-4F0D6E6579C9}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Relay.Api.Tests", "Relay.Api.Tests\Relay.Api.Tests.csproj", "{E154DEEA-EE05-495D-8B6A-2D249DD84898}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{5FFCEA1F-D5A6-4540-8943-4F0D6E6579C9}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{5FFCEA1F-D5A6-4540-8943-4F0D6E6579C9}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{5FFCEA1F-D5A6-4540-8943-4F0D6E6579C9}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{5FFCEA1F-D5A6-4540-8943-4F0D6E6579C9}.Release|Any CPU.Build.0 = Release|Any CPU
+		{E154DEEA-EE05-495D-8B6A-2D249DD84898}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{E154DEEA-EE05-495D-8B6A-2D249DD84898}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{E154DEEA-EE05-495D-8B6A-2D249DD84898}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{E154DEEA-EE05-495D-8B6A-2D249DD84898}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal

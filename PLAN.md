@@ -197,3 +197,6 @@ No open decisions remain.
 
 ## Plan changes
 <!-- Changes made after coding starts: date, what changed, why. -->
+- **2026-10-02, S0, packages.** The owner approved `Swashbuckle.AspNetCore` 6.6.2 and `Microsoft.AspNetCore.OpenApi` 8.0.31, which the default `dotnet new webapi` template adds. These are additions to D16. The owner also asked to be consulted for each library from now on, including those already listed in D16. xUnit template versions: `Microsoft.NET.Test.Sdk` 17.6.0, `xunit` 2.4.2, `xunit.runner.visualstudio` 2.4.5, `coverlet.collector` 6.0.0.
+- **2026-10-02, S0, Angular version.** `npx @angular/cli@latest new frontend --routing --style=css --ssr=false --skip-git --ai-config=none --defaults` installed **Angular 22.2.1** (TypeScript 6.0.3). Its default unit-test runner is **Vitest** 5.0.3 with jsdom, so `npx ng test --watch=false` runs Vitest, not Karma.
+- **2026-10-02, S0, placeholder test.** Removed the template's empty `UnitTest1.cs` so that `dotnet test` runs 0 tests, as the S0 "Done when" requires.
