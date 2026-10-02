@@ -1,6 +1,13 @@
+using Microsoft.EntityFrameworkCore;
+using Relay.Api.Data;
+
 var builder = WebApplication.CreateBuilder(args);
 
 // Add services to the container.
+builder.Services.AddDbContext<RelayDbContext>(options =>
+    options.UseSqlServer(builder.Configuration.GetConnectionString("Relay")
+        ?? throw new InvalidOperationException("Connection string 'ConnectionStrings:Relay' is not set.")));
+
 // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();

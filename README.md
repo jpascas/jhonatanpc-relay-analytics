@@ -6,6 +6,15 @@ Seed data and context for the take-home exercise. **Copy the contents into a fre
 
 You don't need to carry `docs/` into your own repo; it's context for you, not part of what you're building.
 
+## Prerequisites
+
+| Tool | Version | Install / check |
+|---|---|---|
+| .NET SDK | 8.0.x (pinned by `backend/global.json`, 8.0.131 or a later 8.0 feature band) | `dotnet --list-sdks` |
+| `dotnet-ef` (global tool) | 8.0 or later | `dotnet tool install --global dotnet-ef --version 8.0.31` (check: `dotnet ef --version`) |
+| Docker with Compose | any recent | `docker compose version` |
+| Node.js + npm | Node 24 used in development | `node --version` |
+
 ## Contents
 
 | Path | What it is |
