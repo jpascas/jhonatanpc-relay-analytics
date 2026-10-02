@@ -13,8 +13,9 @@ The source for every number in [PLAN.md](PLAN.md). Each entry gives the query ex
 If either hash changes, every entry below is stale.
 
 **Environment:** Python 3.14 `sqlite3` (standard library), with `schema.sql` then `seed.sql` loaded into a throwaway file DB with `PRAGMA foreign_keys=OFF`. Run on 2026-10-02.
-- **E-entries** that use local time need the helpers below. They use `zoneinfo` with the `tzdata` package (installed outside the repo, tzdata 2026d). Under CLAUDE.md, that package needs approval before anyone re-runs these.
-- **G-entries** use only the standard library. They rely on fixed summer UTC offsets, which are exact for weeks from 2026-05-25 onward ([E-06](#e-06): the only DST change in range is 2026-03-08).
+- **E-entries** that use local time need the helpers below. They use `zoneinfo` with the `tzdata` package (installed outside the repo, tzdata 2026d). It is approved as a dev-only tool in [PLAN.md](PLAN.md) D16.
+- **G-01 to G-06** use only the standard library. They rely on fixed summer UTC offsets, which are exact for weeks from 2026-05-25 onward ([E-06](#e-06): the only DST change in range is 2026-03-08).
+- **G-07 to G-09** cover weeks before or across the DST change, so they use the E-entry helpers (`aw`, `ev`, IANA zones via `tzdata`).
 
 ## Helpers used by E-entries
 
@@ -286,9 +287,9 @@ SELECT ev.account_id, week_start_utc('2026-07-20', tz), week_end_utc('2026-07-20
 
 ---
 
-## Golden values (standard library only)
+## Golden values
 
-These all share the dedup CTE below, which mirrors D8:
+G-01 to G-06 share the dedup CTE below, which mirrors D8:
 ```sql
 dedup AS (SELECT account_id, location, event_type, occurred_at, duration_seconds, outcome
           FROM activity_events GROUP BY account_id, location, event_type, occurred_at, duration_seconds, outcome)
@@ -401,3 +402,89 @@ baseline weeks with >= 20 known calls: all 8 for 3 accounts; 0 for 11 accounts
 (1,8,32) (2,3,20) (3,0,14) (4,5,21) (5,5,18) (6,8,48) (7,0,8) (8,0,4) (9,0,11) (10,0,6)
 (11,0,10) (12,8,30) (13,0,4) (14,2,15) (15,0,9) (16,0,6) (17,0,5) (18,1,14) (19,0,8)
 ```
+
+## G-06
+**Account 1, missed-call rate, week 2026-07-20 (D7, D9, D21)**
+```sql
+-- account 1 (America/Chicago, CDT = UTC-5), weeks 2026-05-25..2026-07-20, dedup
+WITH RECURSIVE dedup AS (...),
+weeks(wk) AS (SELECT '2026-05-25' UNION ALL SELECT date(wk,'+7 days') FROM weeks WHERE wk < '2026-07-20')
+SELECT w.wk AS local_week_start,
+  SUM(d.event_type='call_received') AS calls,
+  SUM(d.event_type='call_received' AND d.outcome IS NOT NULL) AS known_calls,
+  SUM(d.event_type='call_received' AND d.outcome IS NULL) AS unknown_calls,
+  SUM(d.event_type='call_received' AND d.outcome='missed') AS missed
+FROM weeks w LEFT JOIN dedup d ON d.account_id=1
+  AND d.occurred_at >= datetime(w.wk,'+5 hours') AND d.occurred_at < datetime(w.wk,'+7 days','+5 hours')
+GROUP BY w.wk ORDER BY w.wk
+```
+```
+wk         | calls | known | unknown | missed | rate_pct (missed/known, computed in Python)
+2026-05-25 | 25    | 25    | 0       | 5      | 20.0
+2026-06-01 | 23    | 22    | 1       | 8      | 36.36
+2026-06-08 | 33    | 32    | 1       | 9      | 28.12
+2026-06-15 | 32    | 31    | 1       | 11     | 35.48
+2026-06-22 | 25    | 25    | 0       | 2      | 8.0
+2026-06-29 | 37    | 37    | 0       | 10     | 27.03
+2026-07-06 | 23    | 22    | 1       | 5      | 22.73
+2026-07-13 | 28    | 28    | 0       | 5      | 17.86
+2026-07-20 | 34    | 32    | 2       | 8      | 25.0
+```
+- All 8 baseline weeks have ≥20 known calls, and the reported week has 32 (matches [G-05](#g-05)). Calls 34 match [G-01](#g-01).
+- PERCENTILE.INC over the 8 baseline rates (percent): median **24.8771**, P25 **19.4643**, P75 **29.9647**.
+- v = 8/32 = **25.0**. Inside [P25, P75] and |v − m| = 0.1229 < 10 pp → **typical**.
+- Unknown-outcome calls in the reported week: **2**.
+
+## G-07
+**First and last complete week per account (bounds for the `week` parameter, D29)**
+
+Uses the E-entry helpers (`aw`, IANA zones via `tzdata`).
+```sql
+SELECT account_id, MIN(wk) AS first_complete_week, MAX(wk) AS last_complete_week, COUNT(*) AS complete_weeks
+FROM aw WHERE complete=1 GROUP BY 1 ORDER BY 1
+```
+- First complete week **2026-02-02**: accounts 1, 4, 5, 6, 7, 12, 14, 18 (25 complete weeks each).
+- First complete week **2026-02-09**: accounts 2, 3, 8, 9, 10, 11, 13, 15, 16, 17, 19 (24 complete weeks each).
+- Last complete week **2026-07-20** for all 19 accounts. Account 20 has no rows.
+
+## G-08
+**Account 1, week 2026-03-02: short baseline and DST-week edges**
+
+Uses the E-entry helpers (`aw`, `ev`, IANA zones via `tzdata`); dedup by grouping on the D8 key within the account.
+```sql
+SELECT (SELECT COUNT(*) FROM aw WHERE account_id=1 AND complete=1 AND wk < '2026-03-02') AS complete_weeks_before,
+  (SELECT COUNT(*) FROM (SELECT 1 FROM ev WHERE account_id=1 AND wk='2026-03-02'
+     GROUP BY location, event_type, occurred_at, duration_seconds, outcome)) AS total_dedup,
+  week_start_utc('2026-03-02','America/Chicago') AS start_utc, week_end_utc('2026-03-02','America/Chicago') AS end_utc
+```
+```
+4 | 51 | 2026-03-02 06:00:00 | 2026-03-09 05:00:00
+```
+The week is 167 hours long: it contains the 2026-03-08 DST change ([E-06](#e-06)).
+
+## G-09
+**Account 1, total, reported week 2026-03-30 (baseline crosses DST)**
+
+Uses the E-entry helpers (`aw`, `ev`, IANA zones via `tzdata`); dedup by grouping on the D8 key within the account.
+```sql
+WITH weeks AS (SELECT wk FROM aw WHERE account_id=1 AND complete=1 AND wk BETWEEN '2026-02-02' AND '2026-03-30')
+SELECT w.wk, week_start_utc(w.wk,'America/Chicago') AS start_utc, week_end_utc(w.wk,'America/Chicago') AS end_utc,
+  (SELECT COUNT(*) FROM (SELECT 1 FROM ev WHERE account_id=1 AND ev.wk=w.wk
+     GROUP BY location, event_type, occurred_at, duration_seconds, outcome)) AS total_dedup,
+  (SELECT COUNT(*) FROM ev WHERE account_id=1 AND ev.wk=w.wk) AS total_raw
+FROM weeks w ORDER BY w.wk
+```
+```
+2026-02-02 | 2026-02-02 06:00:00 | 2026-02-09 06:00:00 | 43 | 43
+2026-02-09 | 2026-02-09 06:00:00 | 2026-02-16 06:00:00 | 51 | 51
+2026-02-16 | 2026-02-16 06:00:00 | 2026-02-23 06:00:00 | 40 | 40
+2026-02-23 | 2026-02-23 06:00:00 | 2026-03-02 06:00:00 | 50 | 50
+2026-03-02 | 2026-03-02 06:00:00 | 2026-03-09 05:00:00 | 51 | 51
+2026-03-09 | 2026-03-09 05:00:00 | 2026-03-16 05:00:00 | 52 | 52
+2026-03-16 | 2026-03-16 05:00:00 | 2026-03-23 05:00:00 | 36 | 36
+2026-03-23 | 2026-03-23 05:00:00 | 2026-03-30 05:00:00 | 45 | 45
+2026-03-30 | 2026-03-30 05:00:00 | 2026-04-06 05:00:00 | 61 | 61
+```
+- D6 in Python: baseline sorted [36, 40, 43, 45, 50, 51, 51, 52], v = 61.
+- Median **47.5**, P25 **42.25**, P75 **51.0**; gap threshold max(3, 0.3·47.5) = **14.25**.
+- v > P75, but v − m = 13.5 < 14.25 → **typical**. This is a test for "outside the range but under the gap".
