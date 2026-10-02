@@ -217,3 +217,7 @@ No open decisions remain.
   - The seed runs as one `ExecuteSqlRawAsync` batch in one transaction, with a 5-minute command timeout instead of the default 30 s. `seed.sql` has no `GO` separators and no `{}` braces, so EF's raw-SQL formatting doesn't alter it.
   - `appsettings.Development.json` sets `Microsoft.EntityFrameworkCore.Database.Command` to `Warning`. At Information level, EF logs the full 2.4 MB seed batch on the first start; this also hides SQL command logs in Development (turn it back to `Information` to debug SQL).
   - Verified beyond the "Done when": starting with no `Relay` database at all creates it, migrates and seeds (20 / 12,626 / 12,614), and the next start skips both.
+- **2026-10-02, S2b, implementation details.**
+  - Containers are `relay-sqlserver`, `relay-api` and `relay-frontend`. The API image runs as the base image's non-root user and does not include `Relay.Api.Tests` (`backend/.dockerignore`).
+  - `GET /api/health` (built-in `AddHealthChecks`) has no unit test: an in-process HTTP test would need `Microsoft.AspNetCore.Mvc.Testing`, which is not approved (D16). It is checked with `curl` instead, directly and through both proxies.
+  - `UseHttpsRedirection` stays; in the container no HTTPS port is configured, so it does not redirect.

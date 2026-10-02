@@ -1,5 +1,8 @@
-# Local development database only. The SA password is a dev-only value,
+# Development-only stack. Passwords here are dev-only values; the SA password is
 # repeated in backend/Relay.Api/appsettings.Development.json.
+#
+#   Full stack:          docker compose up -d --build  -> http://localhost:4200 (API on http://localhost:8080)
+#   Host development:    docker compose up -d sqlserver   (then `dotnet run` / `npx ng serve`)
 services:
   sqlserver:
     image: mcr.microsoft.com/mssql/server:2022-latest
@@ -18,6 +21,32 @@ services:
       timeout: 5s
       retries: 12
       start_period: 20s
+
+  api:
+    build:
+      context: ./backend
+      dockerfile: Relay.Api/Dockerfile
+    container_name: relay-api
+    environment:
+      # Development: migrate and seed at startup (D28).
+      ASPNETCORE_ENVIRONMENT: "Development"
+      ConnectionStrings__Relay: "Server=sqlserver,1433;Database=Relay;User Id=sa;Password=Relay_Dev_Pass1!;TrustServerCertificate=True"
+      Seed__Path: "/seed/seed.sql"
+    volumes:
+      - ./seed.sql:/seed/seed.sql:ro
+    ports:
+      - "8080:8080"
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+
+  frontend:
+    build: ./frontend
+    container_name: relay-frontend
+    ports:
+      - "4200:80"
+    depends_on:
+      - api
 
 volumes:
   relay-sqlserver-data:

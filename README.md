@@ -15,6 +15,19 @@ You don't need to carry `docs/` into your own repo; it's context for you, not pa
 | Docker with Compose | any recent | `docker compose version` |
 | Node.js + npm | Node 24 used in development | `node --version` |
 
+## Run everything with Docker
+
+```bash
+docker compose up -d --build
+```
+
+- App: http://localhost:4200 (nginx serves the Angular build and proxies `/api` to the API)
+- API: http://localhost:8080 (Swagger at `/swagger`, health at `/api/health`)
+- On first start the API applies migrations and loads `seed.sql` (Development only); later starts skip the seed.
+- To reset the database: `docker compose down -v`, which deletes the database volume.
+
+For host development, start only the database with `docker compose up -d sqlserver`, then run `dotnet run` in `backend/Relay.Api` and `npx ng serve` in `frontend/`. `ng serve` proxies `/api` to the API at http://localhost:5038.
+
 ## Contents
 
 | Path | What it is |

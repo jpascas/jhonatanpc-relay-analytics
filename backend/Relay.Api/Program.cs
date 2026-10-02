@@ -8,6 +8,7 @@ builder.Services.AddDbContext<RelayDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("Relay")
         ?? throw new InvalidOperationException("Connection string 'ConnectionStrings:Relay' is not set.")));
 builder.Services.Configure<SeedOptions>(builder.Configuration.GetSection(SeedOptions.SectionName));
+builder.Services.AddHealthChecks();
 
 // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
 builder.Services.AddEndpointsApiExplorer();
@@ -29,6 +30,8 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseHttpsRedirection();
+
+app.MapHealthChecks("/api/health");
 
 var summaries = new[]
 {
