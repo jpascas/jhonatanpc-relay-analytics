@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Relay.Api.Data;
+using Relay.Api.Time;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -9,6 +10,9 @@ builder.Services.AddDbContext<RelayDbContext>(options =>
         ?? throw new InvalidOperationException("Connection string 'ConnectionStrings:Relay' is not set.")));
 builder.Services.Configure<SeedOptions>(builder.Configuration.GetSection(SeedOptions.SectionName));
 builder.Services.AddHealthChecks();
+
+// D1: one fixed "now" for the app's lifetime, read once from config or the data; keyed, so only reporting sees it.
+builder.Services.AddReportingClock();
 
 // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
 builder.Services.AddEndpointsApiExplorer();
@@ -22,6 +26,10 @@ if (app.Environment.IsDevelopment())
     await DevelopmentSeeder.RunAsync(app);
 }
 
+// Resolve the clock at startup (after seeding) so a bad Clock:NowUtc fails fast and "now" is logged.
+app.Logger.LogInformation("Clock: now = {NowUtc:O}",
+    app.Services.GetRequiredKeyedService<TimeProvider>(ReportingClockServiceCollectionExtensions.Key).GetUtcNow());
+
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
 {
@@ -33,29 +41,4 @@ app.UseHttpsRedirection();
 
 app.MapHealthChecks("/api/health");
 
-var summaries = new[]
-{
-    "Freezing", "Bracing", "Chilly", "Cool", "Mild", "Warm", "Balmy", "Hot", "Sweltering", "Scorching"
-};
-
-app.MapGet("/weatherforecast", () =>
-{
-    var forecast =  Enumerable.Range(1, 5).Select(index =>
-        new WeatherForecast
-        (
-            DateOnly.FromDateTime(DateTime.Now.AddDays(index)),
-            Random.Shared.Next(-20, 55),
-            summaries[Random.Shared.Next(summaries.Length)]
-        ))
-        .ToArray();
-    return forecast;
-})
-.WithName("GetWeatherForecast")
-.WithOpenApi();
-
 app.Run();
-
-record WeatherForecast(DateOnly Date, int TemperatureC, string? Summary)
-{
-    public int TemperatureF => 32 + (int)(TemperatureC / 0.5556);
-}

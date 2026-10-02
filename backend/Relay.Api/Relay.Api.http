@@ -1,6 +1,5 @@
 @Relay.Api_HostAddress = http://localhost:5038
 
-GET {{Relay.Api_HostAddress}}/weatherforecast/
-Accept: application/json
+GET {{Relay.Api_HostAddress}}/api/health
 
 ###
