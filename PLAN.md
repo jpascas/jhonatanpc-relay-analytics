@@ -212,3 +212,8 @@ No open decisions remain.
   - The frontend is served by nginx, which proxies `/api`, so there is no CORS.
   - Images approved per library: `mcr.microsoft.com/dotnet/sdk:8.0`, `mcr.microsoft.com/dotnet/aspnet:8.0`, `node:24-alpine`, `nginx:alpine`.
   - No new NuGet or npm packages. S2 gains the `Seed:Path` setting that S2b needs.
+- **2026-10-02, S2, implementation details.**
+  - `DevelopmentSeeder` runs from `Program.cs` before the app starts, only when `IsDevelopment()`. `SeedOptions` (section `Seed`) resolves `Path` against the content root; an absolute path is used as-is. A missing seed file stops startup with an error naming `Seed:Path`.
+  - The seed runs as one `ExecuteSqlRawAsync` batch in one transaction, with a 5-minute command timeout instead of the default 30 s. `seed.sql` has no `GO` separators and no `{}` braces, so EF's raw-SQL formatting doesn't alter it.
+  - `appsettings.Development.json` sets `Microsoft.EntityFrameworkCore.Database.Command` to `Warning`. At Information level, EF logs the full 2.4 MB seed batch on the first start; this also hides SQL command logs in Development (turn it back to `Information` to debug SQL).
+  - Verified beyond the "Done when": starting with no `Relay` database at all creates it, migrates and seeds (20 / 12,626 / 12,614), and the next start skips both.

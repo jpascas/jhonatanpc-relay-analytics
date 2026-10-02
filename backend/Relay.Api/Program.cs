@@ -7,12 +7,19 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddDbContext<RelayDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("Relay")
         ?? throw new InvalidOperationException("Connection string 'ConnectionStrings:Relay' is not set.")));
+builder.Services.Configure<SeedOptions>(builder.Configuration.GetSection(SeedOptions.SectionName));
 
 // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
 var app = builder.Build();
+
+// D28: outside Development nothing is migrated or seeded at startup; use `dotnet ef database update`.
+if (app.Environment.IsDevelopment())
+{
+    await DevelopmentSeeder.RunAsync(app);
+}
 
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
