@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Relay.Api.Data;
+using Relay.Api.Reporting;
 using Relay.Api.Time;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -13,6 +14,9 @@ builder.Services.AddHealthChecks();
 
 // D1: one fixed "now" for the app's lifetime, read once from config or the data; keyed, so only reporting sees it.
 builder.Services.AddReportingClock();
+
+// D23: thresholds from the StatusRules section; invalid values stop startup.
+builder.Services.AddStatusThresholds(builder.Configuration);
 
 // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
 builder.Services.AddEndpointsApiExplorer();

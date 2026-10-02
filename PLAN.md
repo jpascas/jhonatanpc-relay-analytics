@@ -70,6 +70,7 @@ Implementation plan, written before any code. Every number links to its query an
 | D26 | Missed-call rate status uses the count labels `below`/`above`/`typical`; the UI text names the metric, e.g. "Missed-call rate above typical" | One status vocabulary (O11 option a) | The label doesn't say whether above is good or bad |
 | D27 | If fewer than 8 complete baseline weeks exist before the reported week (reached by requesting an early week with `?week=` (D29), e.g. account 1 `2026-03-02` has 4 of 8 ([G-08](EVIDENCE.md#g-08)), or by setting `Clock:NowUtc` early; an account's first complete week is 2026-02-02 or 2026-02-09, [G-07](EVIDENCE.md#g-07)), return 200 with values; `median`/`p25`/`p75`/`status` are `null` and `reasons` holds `insufficient_history` (n of 8) | Shows numbers without a status that has no basis (O12 option a) | No status at all for early weeks |
 | D28 | Seeding: at startup, only when `app.Environment.IsDevelopment()`: run `Database.MigrateAsync()`, then, if `accounts` is empty, read `seed.sql` (repo root) and run it with `ExecuteSqlRawAsync` inside one transaction. Outside Development nothing is migrated or seeded at startup; the schema comes from `dotnet ef database update` (CLAUDE.md "Commands"). Running it again is a no-op because of the empty-`accounts` guard | `seed.sql` stays untouched and is the only copy of the data; no manual step (O14 option a). The guard is required: the seed inserts fixed ids, so a second run would fail on duplicate primary keys | Startup in Development is slower on the first run; EF Core 9 `UseSeeding` would fit but D16 pins EF Core 8 |
+| D30 | D27 also applies to the missed-call rate: with fewer than `baselineWeeks` complete baseline weeks, `missedCallRate` gets `insufficient_history` (n of 8) and null `value`/`median`/`p25`/`p75`/`status`. Reasons are listed in this order: `reported_week_too_few_calls`, `baseline_too_few_weeks`, `insufficient_history` | No status without a full baseline, the same rule as counts (owner choice, raised during S4). Real case: account 1 `?week=2026-03-23` has 7 of 8 baseline weeks | A rate that D21 alone would allow is hidden for early weeks |
 | D29 | Optional query parameter `week` (local Monday, `YYYY-MM-DD`) on `GET /api/accounts/{id}/weekly-status`. Not provided → default week (D2). Not a valid date or not a Monday → 400. Before the account's first complete week, or after its last complete week before "now" → 400. Fewer than 8 complete baseline weeks → 200 with D27 behaviour. An account with no complete weeks (account 20) → any valid Monday returns 200 with the empty result (D11) and `availableWeeks: null`. The response echoes the reported week and adds `availableWeeks: { earliest, latest }`. Bounds in the seed: earliest 2026-02-02 or 2026-02-09, latest 2026-07-20 [G-07](EVIDENCE.md#g-07) | Owner choice (option b): earlier weeks are reachable through the API, and golden values can be requested by week instead of depending on the clock | No UI to pick a week (D14); weeks whose baseline crosses the 2026-03-08 DST change become reachable, so they need tests ([G-08](EVIDENCE.md#g-08), [G-09](EVIDENCE.md#g-09)) |
 
 ## 5. Brief
@@ -170,6 +171,8 @@ O14 was resolved by the owner (option a, Development-only startup seeding) → D
 
 Week selection was re-evaluated after confirming that only the owner's decision 14 (not TICKET.md, PRODUCT_BACKGROUND.md or the brief) excluded it: owner chose an API `week` parameter with a default (option b) → D29; the UI week picker stays out of scope (D14).
 
+During S4: does D27 apply to the missed-call rate? The owner chose yes → D30.
+
 No open decisions remain.
 
 ## 12. API response contract (D24)
@@ -231,3 +234,12 @@ No open decisions remain.
   - **Why:** ASP.NET Core 8 auth (cookies, bearer tokens, OAuth), Identity, output and response caching, HTTP logging and SignalR can take a plain `TimeProvider` from DI. With a frozen non-keyed clock, those would compute expiry and timestamps against 2026-07-27 if added later.
   - **Checked:** log timestamps, the Kestrel `Date` header and request durations use the real clock, both before and after the change. EF Core uses its own internal services.
   - **Tests:** `ReportingClockRegistrationTests` checks three things: the keyed clock resolves, a plain `TimeProvider` is not the frozen clock, and a framework `TimeProvider.System` registration is left alone. All three failed against the previous non-keyed registration.
+- **2026-10-02, S4, implementation details.**
+  - **New decision:** D30 (D27 also applies to the missed-call rate) was decided by the owner during S4.
+  - **Evaluator:** `BaselineEvaluator` (`Reporting/`) is static and pure. `EvaluateCount(value, baseline, thresholds)` serves location totals and every account-level count (D5 is the caller's choice). `EvaluateMissedCallRate(reported, baseline, thresholds)` takes `WeekCalls(KnownOutcome, Missed, UnknownOutcome)` per week; rates are in percent. Results carry `Value`/`Median`/`P25`/`P75`/`Status`/`Reasons`, following the §12 contract. JSON names and snake_case status values are S5's job.
+  - **Boundaries:** the gap comparisons are inclusive (≥) and the range comparisons strict (`<` P25, `>` P75), as written in D6/D7. 8/Site A (m−v = 3 = gap → Below) and a rate exactly 10 pp from the median (→ flagged) are both tested.
+  - **Thresholds:** `StatusThresholds` defaults are in code and repeated in `appsettings.json` `StatusRules`. `StatusThresholdsValidator` checks:
+    - the three D23 rules (relative gap 0–1, baseline weeks ≥ 4, min rate baseline weeks ≤ baseline weeks);
+    - min gap ≥ 0, low-volume median ≥ 0, min known calls ≥ 1, rate gap 0–100, and min rate baseline weeks ≥ 1.
+
+    Each failure names the key, e.g. `StatusRules:RelativeGap must be between 0 and 1 (was 1.5).`. `ValidateOnStart` stops startup.
