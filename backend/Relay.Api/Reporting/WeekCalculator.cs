@@ -16,11 +16,14 @@ public static class WeekCalculator
         new(localMonday, LocalMidnightToUtc(localMonday, zone), LocalMidnightToUtc(localMonday.AddDays(7), zone));
 
     /// <summary>D2: the last local week that has fully ended at <paramref name="now"/>.</summary>
-    public static DateOnly LastCompleteWeek(DateTimeOffset now, TimeZoneInfo zone)
+    public static DateOnly LastCompleteWeek(DateTimeOffset now, TimeZoneInfo zone) =>
+        WeekContaining(now, zone).AddDays(-7);
+
+    /// <summary>The local Monday of the week that contains <paramref name="instant"/>.</summary>
+    public static DateOnly WeekContaining(DateTimeOffset instant, TimeZoneInfo zone)
     {
-        var localToday = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(now, zone).DateTime);
-        var currentMonday = localToday.AddDays(-DaysSinceMonday(localToday));
-        return currentMonday.AddDays(-7);
+        var localDate = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(instant, zone).DateTime);
+        return localDate.AddDays(-DaysSinceMonday(localDate));
     }
 
     /// <summary>

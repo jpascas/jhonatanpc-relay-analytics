@@ -243,3 +243,18 @@ No open decisions remain.
     - min gap ≥ 0, low-volume median ≥ 0, min known calls ≥ 1, rate gap 0–100, and min rate baseline weeks ≥ 1.
 
     Each failure names the key, e.g. `StatusRules:RelativeGap must be between 0 and 1 (was 1.5).`. `ValidateOnStart` stops startup.
+- **2026-10-02, S5, implementation details.**
+  - **Structure:**
+    - Pure and unit-tested: `WeekPlanner` handles D29 validation, `availableWeeks` and D27 baseline filtering; `WeeklyStatusAssembler` handles account sums, statuses and D20 order.
+    - I/O, checked with `curl`: `WeeklyCountsQuery` (ADO.NET, one parameterised SQL command over `activity_events_dedup`) and `WeeklyStatusEndpoint` (minimal API).
+  - **Round trips:** two per request. One EF query loads the account plus `MIN(occurred_at)`; one SQL command returns all location × week counts, zero-filled. Account-level counts are the sums of location rows, which equal direct account counts ([E-22](EVIDENCE.md#e-22)).
+  - **`availableWeeks.earliest`** is the first local week that starts at or after the account's first event, as in G-07. For an account with no complete week yet (none in the seed besides account 20), any valid Monday returns the empty result, as for account 20.
+  - **D20 details:** locations with no status (D27) sort after Typical, by name. Ties use ordinal name order.
+  - **Account 20:** its counts go through the same evaluator, so the "statuses null" in §12 come with `insufficient_history` (0 of 8) on counts. The rate lists all three D30 reasons.
+  - **Errors** are ProblemDetails:
+    - 404 `Account not found`;
+    - 400 `Invalid week`, with a message saying why (format, not a Monday, outside `availableWeeks`);
+    - 400 for a non-integer id, from minimal-API binding (in Development the body includes exception details).
+    - `?week=` (empty) is 400.
+  - **JSON:** status values are snake_case via `JsonStringEnumConverter(SnakeCaseLower)`; `byType` keys are the event type names.
+  - **Week 2026-07-20 for account 6 has no Below location.** S6's "Below rows first" is vacuous there: the first rows are Above (Site M, Site O, then Site A). `?week=2026-04-13` has a Below row (Site G, 0 events, [E-13](EVIDENCE.md#e-13)).

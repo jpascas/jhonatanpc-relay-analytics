@@ -1,3 +1,5 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.EntityFrameworkCore;
 using Relay.Api.Data;
 using Relay.Api.Reporting;
@@ -17,6 +19,11 @@ builder.Services.AddReportingClock();
 
 // D23: thresholds from the StatusRules section; invalid values stop startup.
 builder.Services.AddStatusThresholds(builder.Configuration);
+
+// §12: status values are snake_case strings (below, above, low_volume, typical).
+builder.Services.ConfigureHttpJsonOptions(options =>
+    options.SerializerOptions.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.SnakeCaseLower)));
+builder.Services.AddProblemDetails();
 
 // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
 builder.Services.AddEndpointsApiExplorer();
@@ -44,5 +51,6 @@ if (app.Environment.IsDevelopment())
 app.UseHttpsRedirection();
 
 app.MapHealthChecks("/api/health");
+app.MapWeeklyStatus();
 
 app.Run();
