@@ -258,3 +258,17 @@ No open decisions remain.
     - `?week=` (empty) is 400.
   - **JSON:** status values are snake_case via `JsonStringEnumConverter(SnakeCaseLower)`; `byType` keys are the event type names.
   - **Week 2026-07-20 for account 6 has no Below location.** S6's "Below rows first" is vacuous there: the first rows are Above (Site M, Site O, then Site A). `?week=2026-04-13` has a Below row (Site G, 0 events, [E-13](EVIDENCE.md#e-13)).
+- **2026-10-02, S6, implementation details.**
+  - **Files:** `src/app/weekly-status/`, with the model typed from §12, `WeeklyStatusService` (relative `/api/...` URL), `WeeklyStatusPage` and pure label helpers. The page is the only route (`''`); any other path redirects to it. The template's placeholder page and title are gone; the page title is "Weekly activity". `provideHttpClient(withFetch())` was added; no new npm packages.
+  - **State:** the account lives only in `?account=`. The page has an "Account id" form that navigates to `?account=n`, so reload and links keep it. Missing account → a prompt; non-numeric → a message. Neither calls the API.
+  - **Views:** loading; loaded (account summary + locations table, rendered in the order received, D20); `locations: []` → "No activity recorded for this account." (D11); 404 → "Account not found." (D18); status 0 or any other error → message with no numbers and a Retry button that repeats the request once per click (D19).
+  - **Text:**
+    - Statuses read "Below typical", "Above typical", "Low volume", "Typical".
+    - The missed-call rate row is labelled "Missed-call rate" (D26).
+    - A missing status shows its reasons as "n of m", e.g. "Too few calls with a known outcome last week (18 of 20)" (D21/D25/D27/D30).
+    - Ranges show "P25–P75 (median m)"; rates use one decimal and %.
+    - The rate note uses singular or plural ("1 call … is not counted", "2 calls … are not counted"). Fixed after the browser check on account 5, with a test.
+  - **Checked in the browser against the Docker stack (:4200):**
+    - `?account=6` → 15 rows in the API's order, and a reload keeps the account.
+    - Accounts 20 and 999 through the form → the empty and not-found messages.
+    - API container stopped → nginx answers 502 after about 3 s → error + Retry. API restarted → one Retry click sends one request and loads 15 rows.

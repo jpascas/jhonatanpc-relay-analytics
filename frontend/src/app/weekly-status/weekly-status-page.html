@@ -1,0 +1,105 @@
+<form class="account-form" (submit)="show($event, accountInput.value)">
+  <label for="account">Account id</label>
+  <input #accountInput id="account" name="account" inputmode="numeric" [value]="accountParam() ?? ''" />
+  <button type="submit">Show</button>
+</form>
+
+@let v = view();
+@switch (v.kind) {
+  @case ('no-account') {
+    <p class="message">Enter an account id to see last week's activity.</p>
+  }
+  @case ('invalid-account') {
+    <p class="message">The account id must be a whole number.</p>
+  }
+  @case ('loading') {
+    <p class="message">Loading…</p>
+  }
+  @case ('not-found') {
+    <p class="message">Account not found.</p>
+  }
+  @case ('error') {
+    <div class="message error" role="alert">
+      <p>Could not load the weekly status. Check that the API is running, then try again.</p>
+      <button type="button" data-testid="retry" (click)="retry()">Retry</button>
+    </div>
+  }
+  @case ('loaded') {
+    @let data = v.data;
+    <h1>{{ data.accountName }}</h1>
+    <p class="week">
+      Week of {{ data.reportedWeek.localStart }} ({{ data.timezone }})@if (data.baselineWeeks.length > 0) {,
+        compared with the {{ data.baselineWeeks.length }} weeks before it}.
+    </p>
+
+    @if (data.locations.length === 0) {
+      <p class="message">No activity recorded for this account.</p>
+    } @else {
+      <h2>Account</h2>
+      <table data-testid="account-summary">
+        <thead>
+          <tr><th>Metric</th><th>Last week</th><th>Typical range</th><th>Status</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <th scope="row">All activity</th>
+            <td class="num">{{ data.account.total.value }}</td>
+            <td class="num">{{ range(data.account.total) }}</td>
+            <td>{{ statusText(data.account.total) }}</td>
+          </tr>
+          @for (type of types; track type) {
+            @let item = data.account.byType[type];
+            <tr>
+              <th scope="row">{{ typeLabels[type] }}</th>
+              <td class="num">{{ item.value }}</td>
+              <td class="num">{{ range(item) }}</td>
+              <td>{{ statusText(item) }}</td>
+            </tr>
+          }
+          @let rate = data.account.missedCallRate;
+          <tr data-testid="rate-row">
+            <th scope="row">Missed-call rate</th>
+            <td class="num">{{ rate.value === null ? '—' : (rate.value | number: '1.1-1') + '%' }}</td>
+            <td class="num">
+              @if (rate.p25 !== null && rate.p75 !== null) {
+                {{ rate.p25 | number: '1.1-1' }}–{{ rate.p75 | number: '1.1-1' }}%
+              } @else { — }
+            </td>
+            <td>{{ statusText(rate) }}</td>
+          </tr>
+        </tbody>
+      </table>
+      <p class="note" data-testid="rate-note">
+        Missed-call rate uses {{ callCount(rate.knownOutcomeCalls) }} with a known outcome;
+        {{ callCount(rate.unknownOutcomeCalls) }} with no recorded outcome
+        {{ rate.unknownOutcomeCalls === 1 ? 'is' : 'are' }} not counted.
+      </p>
+
+      <h2>Locations</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Location</th><th>Last week</th><th>Typical range</th><th>Status</th>
+            @for (type of types; track type) { <th>{{ typeLabels[type] }}</th> }
+          </tr>
+        </thead>
+        <tbody>
+          @for (row of data.locations; track row.location) {
+            <tr data-testid="location-row" [class]="'status-' + (row.total.status ?? 'none')">
+              <th scope="row" data-testid="location-name">{{ row.location }}</th>
+              <td class="num">{{ row.total.value }}</td>
+              <td class="num">{{ range(row.total) }}</td>
+              <td>{{ statusText(row.total) }}</td>
+              @for (type of types; track type) {
+                <td class="num" data-testid="type-count">{{ row.byType[type] }}</td>
+              }
+            </tr>
+          }
+        </tbody>
+      </table>
+      <p class="note">
+        Typical range is the middle half (25th–75th percentile) of the previous weeks; the median is shown in brackets.
+      </p>
+    }
+  }
+}
