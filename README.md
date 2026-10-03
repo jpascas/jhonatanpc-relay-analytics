@@ -173,6 +173,7 @@ Out of scope per the ticket or brief: auth, alerting, forecasting, CI, visual po
   - linting with ESLint (`angular-eslint`). It isn't set up today: there is no `lint` target and no ESLint packages.
   - an enforced Prettier check. Prettier is already installed with a `.prettierrc`, and all of `frontend/src` is formatted (`npx prettier --check "src/**/*.{ts,html,css}"` passes). But there is no script, hook or CI step that runs it, so it can drift again.
 - **A code-review skill for the local AI agent,** so each slice is reviewed against the plan's decisions before it is committed.
+- **Evaluate OpenSpec for spec-driven development.** This repo already works spec-first by hand: PLAN.md decisions and "Done when" criteria, EVIDENCE.md, and a "Plan changes" log. But PLAN.md now mixes the current spec with its change history. OpenSpec keeps the current specs separate from per-change proposals, which could make "what is true now" easier to review. I would trial it on the next feature, and compare it with plain Markdown on review effort and overhead for small changes.
 
 ## Repository layout
 
