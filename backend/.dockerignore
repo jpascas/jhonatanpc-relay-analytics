@@ -1,4 +1,5 @@
 **/bin/
 **/obj/
 Relay.Api.Tests/
+Relay.Api.IntegrationTests/
 *.user

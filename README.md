@@ -4,6 +4,8 @@ A weekly dashboard view that tells a customer admin, for each location, whether 
 
 For example, at Pacific Smiles (5 locations) in the week of 2026-07-20, the first row reads **Site B: 3 events against a typical range of 5.5–10.25 (median 6.5), Below typical**. That's the site to call on Monday morning.
 
+![Weekly activity page for Pacific Smiles, week of 2026-07-20: Site B, the first location row, is highlighted as Below typical with 3 events against a typical range of 5.5–10.25.](docs/images/pacific-smiles-week-2026-07-20.png)
+
 - **Backend:** .NET 8 minimal API, EF Core migrations, explicit SQL for the aggregation. SQL Server 2022 in Docker.
 - **Frontend:** Angular 22 SPA, one page.
 
@@ -106,19 +108,35 @@ The handoff is safe because of the spec, not the model choice. Golden values mak
 ## Tests
 
 ```bash
-cd backend && dotnet test
+cd backend && dotnet test Relay.Api.Tests   # unit tests only: fast, no Docker
+cd backend && dotnet test                   # unit + integration: needs Docker running
 cd frontend && npx ng test --watch=false
 ```
 
-Last run: backend `Passed! - Failed: 0, Passed: 115, Skipped: 0, Total: 115`; frontend `Test Files 2 passed (2), Tests 15 passed (15)`.
+Last run:
+- backend unit: `Passed! - Failed: 0, Passed: 115, Skipped: 0, Total: 115`
+- backend integration: `Passed! - Failed: 0, Passed: 24, Skipped: 0, Total: 24`, about 20 s including the container start
+- frontend: `Test Files 2 passed (2), Tests 15 passed (15)`
 
-What is and isn't covered:
+What is covered:
 
-- **Unit-tested:** the week calculator (IANA zones, DST), the baseline evaluator (percentiles, status rules, boundaries), thresholds validation, the response assembler, the clock registration, the EF model, and the Angular page states.
-- **Checked with `curl` against the real stack, not in automated tests:** the SQL aggregation and the HTTP endpoint. An in-process HTTP test needs `Microsoft.AspNetCore.Mvc.Testing`, which I did not add (no new packages without approval). The expected values are the golden values in [PLAN.md §6](PLAN.md) (e.g. account 1, week 2026-07-20: 34 calls, 12 leads, 7 appointments, total 53, missed-call rate 25.0%, typical).
+- **Unit tests** (`Relay.Api.Tests`, Angular specs): the week calculator (IANA zones, DST), the baseline evaluator (percentiles, status rules, boundaries), thresholds validation, the response assembler, the clock registration, the EF model, and the Angular page states.
+- **Integration tests** (`Relay.Api.IntegrationTests`): [Testcontainers](https://dotnet.testcontainers.org/) starts a throwaway SQL Server 2022 on a random port, so the compose database is untouched. `WebApplicationFactory` runs the real API against it. The app's own Development startup migrates and loads `seed.sql`, so seeding is tested too. The tests assert the golden values in [PLAN.md §6](PLAN.md):
+  - the four §6 golden values over HTTP, e.g. account 1, week 2026-07-20: 34 calls, 12 leads, 7 appointments, total 53, missed-call rate 25.0%, typical;
+  - the status counts across all 69 locations (40 typical, 15 above, 8 below, 6 low volume);
+  - duplicates counted once, zero-event locations listed, D20 order;
+  - the §5 edge cases (404, 400s, empty account, short history);
+  - seeding happens once, and never in Production;
+  - configuration effects (an invalid threshold stops startup; `Clock:NowUtc` moves the default week).
+- **Not automated:** the Docker Compose stack itself (nginx proxy, container images) and the page in a real browser. Those were checked by hand.
+- **Known risk: golden values are pinned to the seed.**
+  - **Why they are hard-coded:** the expected values come from [EVIDENCE.md](EVIDENCE.md), computed outside the app (Python over SQLite). That is what makes them an independent check; deriving them from the app's own logic would only test the code against itself.
+  - **Duplication:** they are repeated in PLAN.md, the unit tests and the integration tests. Each test cites its source (`// §6(b) / G-02`), but nothing ties the copies together.
+  - **Tied to one seed:** they are valid only for the `seed.sql` whose sha256 is recorded in EVIDENCE.md, and nothing checks that hash today. If the seed changes, many tests fail at once with number mismatches, and nothing says the evidence is out of date.
 
 ## Notable technical choices
 
+- **Deliberately simple structure.** One API project and one Angular feature folder, because this is a single read-only feature meant to get product feedback, and its scope may change after that feedback. The seams that matter are already there: the rules are pure classes with no database or clock (`Reporting/`), data access is in one place (`Data/`, one SQL query), and the endpoint only wires them together. When the product grows (more features, write paths, auth, per-account settings, more people on the code), I would split along those seams into separate projects, following Clean Architecture or vertical slices, whichever fits the features that actually arrive. Doing it now would add layers before the requirements that justify them.
 - **Raw SQL (ADO.NET) for the aggregation, EF Core for schema and migrations.** One parameterised query returns every location × week × event type count, zero-filled, in one round trip. EF would need a hand-tuned query anyway, and the SQL is easy to compare with the golden values.
 - **Baseline logic is a pure C# class** (`BaselineEvaluator`). No database or clock inside it, so every rule and boundary is a fast unit test.
 - **Timezone math in C#, not SQL.** SQL Server cannot convert IANA zone names natively, and plain range filters keep the SQL simple.
@@ -148,9 +166,9 @@ Out of scope per the ticket or brief: auth, alerting, forecasting, CI, visual po
 
 - **Per-project agent guidance:** a `CLAUDE.md` in `backend/` and in `frontend/`, each with that project's commands, conventions and rules, instead of one shared file.
 - **Pre-commit hooks** that run the quality gates for both projects (build, tests, lint and format checks), so nothing is committed with a failing gate.
+- **Golden values in one place:** a `GoldenValues` class per test project, each value tagged with its `G-nn` id, so the copies can't drift. Also a seed-hash guard test that checks `seed.sql` against the sha256 in EVIDENCE.md first, so a changed seed fails once with "EVIDENCE.md is stale" instead of as a dozen number mismatches. See "Known risk" under Tests.
 - **.NET:**
   - an `.editorconfig` plus static code analysis: the SDK's built-in analyzers turned up (`AnalysisLevel`, `EnforceCodeStyleInBuild`, warnings as errors), and possibly an analyzer package such as SonarAnalyzer. There is no `.editorconfig` or analyzer configuration in `backend/` today.
-  - integration tests with Testcontainers (a disposable SQL Server) for the SQL aggregation and the HTTP endpoint, asserting the golden values in [PLAN.md §6](PLAN.md). These are checked by hand with `curl` today.
 - **Angular:**
   - linting with ESLint (`angular-eslint`). It isn't set up today: there is no `lint` target and no ESLint packages.
   - an enforced Prettier check. Prettier is already installed with a `.prettierrc`, and all of `frontend/src` is formatted (`npx prettier --check "src/**/*.{ts,html,css}"` passes). But there is no script, hook or CI step that runs it, so it can drift again.
@@ -164,7 +182,8 @@ Out of scope per the ticket or brief: auth, alerting, forecasting, CI, visual po
 | `EVIDENCE.md` | Every number in the plan, with its query and output |
 | `ai-log/` | Raw AI sessions |
 | `backend/Relay.Api` | API: `Reporting/` (week calculator, evaluator, assembler, endpoint), `Data/` (EF model, migrations, weekly-counts SQL, dev seeder), `Time/` (reporting clock) |
-| `backend/Relay.Api.Tests` | xUnit tests |
+| `backend/Relay.Api.Tests` | xUnit unit tests (no Docker) |
+| `backend/Relay.Api.IntegrationTests` | xUnit integration tests: Testcontainers SQL Server + `WebApplicationFactory` |
 | `frontend/src/app/weekly-status` | The page, service, model and labels |
 | `schema.sql`, `seed.sql` | Provided source data, unchanged |
 | `docker-compose.yml` | SQL Server, API and frontend |

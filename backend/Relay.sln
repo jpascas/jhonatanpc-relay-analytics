@@ -7,6 +7,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Relay.Api", "Relay.Api\Rela
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Relay.Api.Tests", "Relay.Api.Tests\Relay.Api.Tests.csproj", "{E154DEEA-EE05-495D-8B6A-2D249DD84898}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Relay.Api.IntegrationTests", "Relay.Api.IntegrationTests\Relay.Api.IntegrationTests.csproj", "{5CA5E57E-1B65-4779-9BF4-EC07B4FD9C2A}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -24,5 +26,9 @@ Global
 		{E154DEEA-EE05-495D-8B6A-2D249DD84898}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{E154DEEA-EE05-495D-8B6A-2D249DD84898}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{E154DEEA-EE05-495D-8B6A-2D249DD84898}.Release|Any CPU.Build.0 = Release|Any CPU
+		{5CA5E57E-1B65-4779-9BF4-EC07B4FD9C2A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{5CA5E57E-1B65-4779-9BF4-EC07B4FD9C2A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{5CA5E57E-1B65-4779-9BF4-EC07B4FD9C2A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{5CA5E57E-1B65-4779-9BF4-EC07B4FD9C2A}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal
