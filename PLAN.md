@@ -120,7 +120,7 @@ calls **34**, leads **12**, appointments **7**, total **53**.
 
 Queries and outputs: [G-01](EVIDENCE.md#g-01), [G-02](EVIDENCE.md#g-02), [G-06](EVIDENCE.md#g-06), [G-09](EVIDENCE.md#g-09). (a)–(c) use fixed summer UTC offsets, which are exact because all their weeks (from 2026-05-25) are after the 2026-03-08 DST change ([E-06](EVIDENCE.md#e-06)). (d) spans the DST change, so its week edges come from IANA zones via `tzdata` (D16).
 
-## 7. Implementation slices (total 6 h 45 min, including S2b's 40 min; the original 6 h 05 min was 5 min over the 4–6 h target and accepted by the owner, and S2b was added by the owner)
+## 7. Implementation slices (total 8 h 00 min. The original 6 h 05 min was 5 min over the 4–6 h target, accepted by the owner. The owner then added S2b, 40 min, and S8, 75 min)
 Important consideration: run all available test after implementation of each slice.
 | # | Built | Done when | Budget |
 |---|---|---|---|
@@ -133,6 +133,50 @@ Important consideration: run all available test after implementation of each sli
 | S5 | Explicit SQL weekly counts (9 weeks × location × type, zero-filled, D22 location list, UTC edge parameters from D15) + `GET /api/accounts/{id}/weekly-status` returning active thresholds; `week` parameter with validation and `availableWeeks` (D29) | `curl` for account 1 returns 34/12/7/53 and missed-call rate 25.0, typical (§6(c)); account 6 `locations` are in D20 order; account 6 Site C returns value 6, range 3.75–8.75, Typical; account 20 returns 200 with `[]`; account 999 returns 404; account 5 returns rate reason `reported_week_too_few_calls`; `?week=2026-07-20` returns the same body as no `week`; account 1 `?week=2026-03-30` returns total 61, median 47.5, range 42.25–51.0, typical (§6(d)); the Requested week edge cases in §5 hold | 80 min |
 | S6 | Angular page: account from `?account=`, table of locations in D20 order (value, range, status, per-type counts), account summary row with rate reasons, error state with Retry (D19), not-found state (D18) | Load `?account=6` → 15 rows, Below rows first; reload keeps the account; account 20 shows the empty message; account 999 shows "Account not found"; API stopped → error + Retry | 75 min |
 | S7 | README: run steps, assumptions (§3), known gaps | Following the README on a clean clone reaches S6's result | 20 min |
+| S8 | **Integration tests with Testcontainers**, details in §7.1. New xUnit project `backend/Relay.Api.IntegrationTests` (`net8.0`, in `Relay.sln`, references `Relay.Api`). It runs the real API in-process (`WebApplicationFactory<Program>`) against a throwaway SQL Server 2022 container started once per test run. The S5 `curl` checks and the S2 seeding checks become automated tests asserting the §5/§6 golden values | All §7.1 tests are shown failing first (stub-first: the fixture throws until it is implemented), then passing. `dotnet test Relay.Api.Tests` runs without Docker; `dotnet test` in `backend/` runs both projects with Docker, and the summary lines of both projects are pasted. The compose DB on port 1433 is unaffected. CLAUDE.md and README are updated | 75 min |
+
+### 7.1 S8 details
+
+**Packages and images** (approved by the owner per library, 2026-10-03):
+- `Testcontainers.MsSql` 4.x, which brings `Testcontainers`.
+- `Microsoft.AspNetCore.Mvc.Testing` 8.0.31.
+- The xUnit template packages (as in `Relay.Api.Tests`).
+- Images: `testcontainers/ryuk` (Testcontainers' cleanup container) and the already-approved `mcr.microsoft.com/mssql/server:2022-latest`.
+
+**Infrastructure**
+- `SqlServerFixture` (xUnit collection fixture, `IAsyncLifetime`) starts one `MsSqlContainer` per run and disposes it at the end.
+- `RelayApiFactory : WebApplicationFactory<Program>` sets the environment to `Development`, so D28 migrates and seeds. It also sets `ConnectionStrings:Relay` to the container, on a database name chosen per factory, and `Seed:Path` to the repo's `seed.sql`, found by walking up from the test assembly. The `seed.sql` file is read only, never copied or changed.
+- `Program.cs` gains `public partial class Program;` so the factory can reach it. That is the only production-code change.
+
+**Tests**, each asserting values already in this plan:
+- **Seeding (D28, S2):**
+  - A fresh database gives 20 accounts, 12,626 events and 12,614 view rows ([G-03](EVIDENCE.md#g-03)).
+  - Starting a second factory on the same database succeeds and leaves the counts unchanged.
+  - A `Production` start on a migrated, empty database seeds nothing (0 accounts).
+- **Golden values over HTTP:**
+  - §6(a) account 1: 34 / 12 / 7 / 53.
+  - §6(c) account 1 rate: 25.0, median 24.8771, range 19.4643–29.9647, typical.
+  - §6(b) account 6 Site C: 6, range 3.75–8.75, typical.
+  - §6(d) account 1 `?week=2026-03-30`: 61, 47.5, 42.25–51.0, typical (DST, IANA zones on Linux).
+- **Rules across the whole dataset**, week 2026-07-20, every account:
+  - Location statuses total typical 40, above 15, below 8, low volume 6 ([G-04](EVIDENCE.md#g-04)).
+  - Only accounts 1, 4, 6 and 12 get a missed-call status (C2, [G-05](EVIDENCE.md#g-05)).
+- **SQL details:**
+  - Dedup: account 1 Site C, week 2026-07-06 counts 4, not 5 ([G-03](EVIDENCE.md#g-03)).
+  - Zero-filled location: account 6 Site G, week 2026-04-13 is listed with 0 ([E-13](EVIDENCE.md#e-13)).
+  - Account 6 returns 15 locations in D20 order.
+- **§5 edge cases:**
+  - Account 20: 200, `locations: []`, `availableWeeks: null`.
+  - 999: 404. `abc`: 400.
+  - Account 5: reason `reported_week_too_few_calls` 18 of 20.
+  - `?week=2026-07-20` gives the same body as no `week`.
+  - `2026-07-21`, `2026-07-27` and `2026-01-26`: 400.
+  - Account 1 `?week=2026-03-02`: 51, `insufficient_history` 4 of 8.
+- **Configuration:**
+  - `StatusRules:RelativeGap=1.5` makes the factory fail to start, with a message naming the key (D23).
+  - `Clock:NowUtc=2026-04-01T00:00:00Z` moves the default reported week to 2026-03-23 for account 1 (D1, D2).
+
+**Commands:** CLAUDE.md "Backend tests" becomes `dotnet test Relay.Api.Tests` (unit tests, no Docker) plus `dotnet test` (unit and integration, needs Docker). Slices run the full command.
 
 ## 8. Deferred
 - Auth, alerts/notifications, forecasting, CI, visual polish, UI week picker: out of scope (D14; sources per item are listed in D14).
@@ -268,6 +312,16 @@ No open decisions remain.
     - A missing status shows its reasons as "n of m", e.g. "Too few calls with a known outcome last week (18 of 20)" (D21/D25/D27/D30).
     - Ranges show "P25–P75 (median m)"; rates use one decimal and %.
     - The rate note uses singular or plural ("1 call … is not counted", "2 calls … are not counted"). Fixed after the browser check on account 5, with a test.
+  - **Formatting:** `frontend/src` is formatted with the installed Prettier (`.prettierrc` from `ng new`); 8 files changed, and the spec needed a second pass to settle. The reflow split the "Week of …" sentence and added spaces before "," and "." in the rendered text. Tests now pin the exact sentence; it is built in `weekSummary()`, so HTML formatting can't change it. Nothing enforces Prettier yet (README "With more time").
+- **2026-10-03, removed `Microsoft.AspNetCore.OpenApi` (owner decision).**
+  - **Problem:** the Swagger UI showed "Unable to render this definition". `Microsoft.AspNetCore.OpenApi` 8.0.31 pulled in `Microsoft.OpenApi` 1.6.30, which writes `openapi: 3.0.4`. The Swagger UI bundled with Swashbuckle 6.6.2 does not accept that version.
+  - **Fix:** the package was unused after S3 removed `/weatherforecast` (its only use, `.WithOpenApi()`), so it was removed. `Microsoft.OpenApi` now resolves to 1.6.14 via Swashbuckle (`openapi: 3.0.1`).
+  - **Verified:** the UI renders, and "Try it out" for account 1 `?week=2026-03-30` returns 61 / 47.5 / 42.25–51.0 / typical (§6(d)). Backend tests: 115 passed.
+- **2026-10-03, new slice S8: integration tests with Testcontainers (owner decision).** Owner decisions:
+  - **Packages:** all listed in §7.1 are approved. This lifts the D16 exclusion of `Microsoft.AspNetCore.Mvc.Testing`.
+  - **Test commands:** split. `dotnet test Relay.Api.Tests` needs no Docker; the full `dotnet test` needs Docker.
+  - **Red step:** stub-first. The tests are written before the fixture and factory work, so they fail on setup and then pass.
+  - **Motivation:** the SQL aggregation and the endpoint were checked only by hand with `curl` (S5); S8 makes those checks repeatable.
   - **Checked in the browser against the Docker stack (:4200):**
     - `?account=6` → 15 rows in the API's order, and a reload keeps the account.
     - Accounts 20 and 999 through the form → the empty and not-found messages.

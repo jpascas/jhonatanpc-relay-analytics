@@ -2,7 +2,8 @@
 
 export type Status = 'below' | 'above' | 'low_volume' | 'typical';
 
-export type ReasonCode = 'reported_week_too_few_calls' | 'baseline_too_few_weeks' | 'insufficient_history';
+export type ReasonCode =
+  'reported_week_too_few_calls' | 'baseline_too_few_weeks' | 'insufficient_history';
 
 export interface StatusReason {
   code: ReasonCode;

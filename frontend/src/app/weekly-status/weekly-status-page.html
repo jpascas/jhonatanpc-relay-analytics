@@ -1,6 +1,12 @@
 <form class="account-form" (submit)="show($event, accountInput.value)">
   <label for="account">Account id</label>
-  <input #accountInput id="account" name="account" inputmode="numeric" [value]="accountParam() ?? ''" />
+  <input
+    #accountInput
+    id="account"
+    name="account"
+    inputmode="numeric"
+    [value]="accountParam() ?? ''"
+  />
   <button type="submit">Show</button>
 </form>
 
@@ -27,10 +33,7 @@
   @case ('loaded') {
     @let data = v.data;
     <h1>{{ data.accountName }}</h1>
-    <p class="week">
-      Week of {{ data.reportedWeek.localStart }} ({{ data.timezone }})@if (data.baselineWeeks.length > 0) {,
-        compared with the {{ data.baselineWeeks.length }} weeks before it}.
-    </p>
+    <p class="week">{{ weekSummary(data) }}</p>
 
     @if (data.locations.length === 0) {
       <p class="message">No activity recorded for this account.</p>
@@ -38,7 +41,12 @@
       <h2>Account</h2>
       <table data-testid="account-summary">
         <thead>
-          <tr><th>Metric</th><th>Last week</th><th>Typical range</th><th>Status</th></tr>
+          <tr>
+            <th>Metric</th>
+            <th>Last week</th>
+            <th>Typical range</th>
+            <th>Status</th>
+          </tr>
         </thead>
         <tbody>
           <tr>
@@ -59,11 +67,15 @@
           @let rate = data.account.missedCallRate;
           <tr data-testid="rate-row">
             <th scope="row">Missed-call rate</th>
-            <td class="num">{{ rate.value === null ? '—' : (rate.value | number: '1.1-1') + '%' }}</td>
+            <td class="num">
+              {{ rate.value === null ? '—' : (rate.value | number: '1.1-1') + '%' }}
+            </td>
             <td class="num">
               @if (rate.p25 !== null && rate.p75 !== null) {
                 {{ rate.p25 | number: '1.1-1' }}–{{ rate.p75 | number: '1.1-1' }}%
-              } @else { — }
+              } @else {
+                —
+              }
             </td>
             <td>{{ statusText(rate) }}</td>
           </tr>
@@ -79,8 +91,13 @@
       <table>
         <thead>
           <tr>
-            <th>Location</th><th>Last week</th><th>Typical range</th><th>Status</th>
-            @for (type of types; track type) { <th>{{ typeLabels[type] }}</th> }
+            <th>Location</th>
+            <th>Last week</th>
+            <th>Typical range</th>
+            <th>Status</th>
+            @for (type of types; track type) {
+              <th>{{ typeLabels[type] }}</th>
+            }
           </tr>
         </thead>
         <tbody>
@@ -98,7 +115,8 @@
         </tbody>
       </table>
       <p class="note">
-        Typical range is the middle half (25th–75th percentile) of the previous weeks; the median is shown in brackets.
+        Typical range is the middle half (25th–75th percentile) of the previous weeks; the median is
+        shown in brackets.
       </p>
     }
   }

@@ -4,7 +4,13 @@ import { Component, DestroyRef, effect, inject, signal, untracked } from '@angul
 import { toSignal } from '@angular/core/rxjs-interop';
 import { ActivatedRoute, Router } from '@angular/router';
 import { Subscription, map } from 'rxjs';
-import { EVENT_TYPES, EVENT_TYPE_LABELS, STATUS_LABELS, callCount, reasonText } from './weekly-status.labels';
+import {
+  EVENT_TYPES,
+  EVENT_TYPE_LABELS,
+  STATUS_LABELS,
+  callCount,
+  reasonText,
+} from './weekly-status.labels';
 import { WeeklyStatus } from './weekly-status.model';
 import { WeeklyStatusService } from './weekly-status.service';
 
@@ -39,7 +45,7 @@ export class WeeklyStatusPage {
   protected readonly callCount = callCount;
 
   protected readonly accountParam = toSignal(
-    this.route.queryParamMap.pipe(map(params => params.get('account'))),
+    this.route.queryParamMap.pipe(map((params) => params.get('account'))),
     { initialValue: null },
   );
   protected readonly view = signal<View>({ kind: 'no-account' });
@@ -66,9 +72,21 @@ export class WeeklyStatusPage {
     return `${this.decimal(item.p25)}–${this.decimal(item.p75)} (median ${this.decimal(item.median)})`;
   }
 
+  /** Built here, not in the template, so formatting the HTML cannot change the spacing of the sentence. */
+  protected weekSummary(data: WeeklyStatus): string {
+    const week = `Week of ${data.reportedWeek.localStart} (${data.timezone})`;
+    const weeks = data.baselineWeeks.length;
+    return weeks > 0 ? `${week}, compared with the ${weeks} weeks before it.` : `${week}.`;
+  }
+
   /** The status label, or the reasons why there is none (D21, D25, D27). */
-  protected statusText(item: { status: keyof typeof STATUS_LABELS | null; reasons: Parameters<typeof reasonText>[0][] }): string {
-    return item.status !== null ? STATUS_LABELS[item.status] : item.reasons.map(reasonText).join('; ');
+  protected statusText(item: {
+    status: keyof typeof STATUS_LABELS | null;
+    reasons: Parameters<typeof reasonText>[0][];
+  }): string {
+    return item.status !== null
+      ? STATUS_LABELS[item.status]
+      : item.reasons.map(reasonText).join('; ');
   }
 
   private decimal(value: number): string {
@@ -94,9 +112,11 @@ export class WeeklyStatusPage {
     const accountId = Number(raw.trim());
     this.view.set({ kind: 'loading', accountId });
     this.request = this.api.get(accountId).subscribe({
-      next: data => this.view.set({ kind: 'loaded', data }),
+      next: (data) => this.view.set({ kind: 'loaded', data }),
       error: (error: HttpErrorResponse) =>
-        this.view.set(error.status === 404 ? { kind: 'not-found', accountId } : { kind: 'error', accountId }),
+        this.view.set(
+          error.status === 404 ? { kind: 'not-found', accountId } : { kind: 'error', accountId },
+        ),
     });
   }
 }
