@@ -1,0 +1,342 @@
+# PLAN — DASH-247: "Is this normal for us?"
+
+Implementation plan, written before any code. Every number links to its query and output in [EVIDENCE.md](EVIDENCE.md): `E-nn` for the profiling checks, `G-nn` for the golden values. The evidence is pinned to the sha256 of `seed.sql`.
+
+**Starting a new session on this plan:** read this file, then [EVIDENCE.md](EVIDENCE.md), then `CLAUDE.md` (folders, commands, test rules). Decisions D1–D29 are fixed and no decisions are open. If a new question comes up, add it to §11 with options and ask the owner. Every new number must cite an `E-`/`G-` entry or add one to EVIDENCE.md. Record any deviation under "Plan changes".
+
+## 1. The problem behind the ticket
+- **Who:** a customer admin at a service business (1–15 locations, [E-08](EVIDENCE.md#e-08)). They open the dashboard on Monday morning.
+- **What they need:** for last week, is each location's activity normal *for that location*? If not, which site do they call first?
+- **What they do with the answer:** call the site manager of a location that is below (or above) its own typical range. They should not need to export data or ask their account manager.
+- **Today:** the dashboard shows raw totals per location, with no reference point (PRODUCT_BACKGROUND.md).
+
+## 2. Data findings that drive decisions
+| Finding | Evidence | Number | Consequence |
+|---|---|---|---|
+| Data ends before today | [E-01](EVIDENCE.md#e-01) | last `occurred_at` 2026-07-27 22:20:34 UTC, 66 days before 2026-10-02 | A wall-clock "now" gives an empty week → D1 |
+| Last local week is partial for every account | [E-02](EVIDENCE.md#e-02) | week 2026-07-27 partial for 19/19 accounts; last complete week 2026-07-20 | Report the last complete week → D2 |
+| Enough history for an 8-week baseline | [E-03](EVIDENCE.md#e-03) | accounts 1–19 have 24–25 complete weeks each | 8 baseline weeks are always available → D3 |
+| One outlier week | [E-12](EVIDENCE.md#e-12) | account 6, week 2026-06-01: 881 events vs median 76; 805 on 2026-06-03 across all 15 locations | Mean is inflated (105.1 vs median 76.0) → D4 |
+| Small counts at fine grain | [E-11](EVIDENCE.md#e-11) | median per account×location×type×week = 2, 85% of cells <5; per account×week median 20, 1% <5 | Status only where counts allow → D5 |
+| Exact duplicates | [E-18](EVIDENCE.md#e-18) | 12 pairs with consecutive ids; 12,626 raw rows → 12,614 deduped [G-03](EVIDENCE.md#g-03) | Dedup view → D8 |
+| NULL outcomes | [E-16](EVIDENCE.md#e-16) | 3.1% of calls (240/7,780); never above 5.1% per account | NULL outcome = unknown → D9 |
+| Duration does not follow outcome | [E-17](EVIDENCE.md#e-17) | missed calls average 737 s vs connected 765 s | Duration not used → D10 |
+| Zero weeks at location grain | [E-13](EVIDENCE.md#e-13) | 4 of 1,672 complete location-weeks have 0 events | Zero is a real value → D3, D11 |
+| Account with no events | [E-19](EVIDENCE.md#e-19) | account 20 (Quiet Harbor Spa) has 0 events | Empty response → D11 |
+| Location names collide across accounts | [E-08](EVIDENCE.md#e-08) | every account uses `Site A`…; 69 (account, location) pairs | Key = (account_id, location) → D12 |
+| Local vs UTC bucketing | [E-06](EVIDENCE.md#e-06) | ≤0.37% of an account's events change week; 1 DST change (2026-03-08) | Local weeks are required for correct edges; the impact is small |
+| Timezones are valid IANA names | [E-05](EVIDENCE.md#e-05) | 6 distinct zones, all valid, including `UTC` (account 18) and `America/Phoenix` (no DST) | No fallback zone needed for this seed |
+
+## 3. Questions for product (working assumption in brackets)
+1. Does "this week" on a Monday mean the week that just ended? [Yes: the last complete local week, D2.]
+2. Is "typical" the location's own recent history, or a comparison with peers? [Own history: the median of the 8 prior weeks with a P25–P75 range, D3/D4.]
+3. Was the account 6 spike on 2026-06-03 (805 events) real demand or an import error? [Real; kept in the data and absorbed by the median.]
+4. Are rows identical except for `id` double submissions? [Yes: counted once, D8.]
+5. What is a call with outcome NULL? [Unknown: shown as a count, excluded from the missed-call rate, D9.]
+6. Is `duration_seconds` trustworthy, given that missed calls have durations ([E-17](EVIDENCE.md#e-17))? [No: not used, D10.]
+7. What should an account with no data see? [An empty result, D11.]
+8. Is "above typical" something to act on, or only "below"? [Both are shown, D6.]
+9. When a location's typical volume is low (m<5) but last week jumped, is it "Above" or "Low volume"? Future option: show both ("Above · Low volume"). [Above wins, D17; affects 6/Site M and 6/Site O in week 2026-07-20, [G-04](EVIDENCE.md#g-04).]
+10. Should the minimum gap scale with volume (flag only if |v−m| ≥ k·√m) instead of the fixed max(3, 0.3m)? See C5. [No: D6 stays, with values configurable via D23.]
+
+## 4. Decisions
+| # | Decision | Reason | Trade-off considered |
+|---|---|---|---|
+| D1 | "Now" = latest `occurred_at`, injected via .NET 8 `TimeProvider`, overridable by config; no `DateTime.UtcNow`/`Now` | [E-01](EVIDENCE.md#e-01): wall clock gives empty weeks | Demo is pinned to the data, not live time; config override covers live use |
+| D2 | Reported week = the week given in the optional `week` query parameter (D29); when `week` is not provided, the last complete Mon 00:00→Mon 00:00 week before "now" in the account's IANA zone. Partial weeks are never shown or used | [E-02](EVIDENCE.md#e-02); "Monday morning" in TICKET.md | Current-week activity is not visible |
+| D3 | Baseline = 8 complete weeks before the reported week; 0-event weeks count as 0 | [E-03](EVIDENCE.md#e-03) (24–25 weeks available), [E-13](EVIDENCE.md#e-13) | 8 weeks reacts to trends faster than a longer window, but is noisier |
+| D4 | Median with P25–P75 range (PERCENTILE.INC, linear interpolation) | [E-12](EVIDENCE.md#e-12) spike | Ignores the size of tail weeks; P25/P75 come from only 8 points |
+| D5 | Location: status on total only, per-type counts shown without status. Account: status on total, each type, missed-call rate | [E-11](EVIDENCE.md#e-11) cell sizes | Per-type issues at one location are not flagged |
+| D6 | Count status, evaluated in this order (D17): Below if v<p25 AND m−v ≥ max(3, 0.3m); Above if v>p75 AND v−m ≥ max(3, 0.3m); Low volume if m<5; else Typical | Needs both a range breach and a minimum absolute gap | Default values; configurable globally via D23 |
+| D7 | Missed-call rate = missed ÷ known-outcome calls; computed only in weeks with ≥20 known-outcome calls; flagged if outside [p25,p75] AND ≥10 pp from the median; baseline per D21 | Avoids rates computed from tiny denominators | Most accounts get no rate (see Challenges C2) |
+| D8 | Dedup on (account_id, location, event_type, occurred_at, duration_seconds, outcome) via a SQL view; seed never modified | [E-18](EVIDENCE.md#e-18) | A legitimate repeat event in the same second would be dropped |
+| D9 | NULL outcome = unknown, never missed or connected, shown as a count | [E-16](EVIDENCE.md#e-16) | Rate denominators shrink by about 3% |
+| D10 | `duration_seconds` unused | [E-17](EVIDENCE.md#e-17) | No call-length insight |
+| D11 | A location with 0 events in the reported week still appears, with 0; account 20 → HTTP 200 with an empty result | [E-13](EVIDENCE.md#e-13), [E-19](EVIDENCE.md#e-19) | — |
+| D12 | Location key = (account_id, location) | [E-08](EVIDENCE.md#e-08) | — |
+| D13 | .NET 8 Web API; EF Core migrations (schema + dedup view); seed loaded at startup in Development only (D28); aggregation in explicit SQL; baseline logic in a pure C# class; SQL Server in Docker (SQLite if setup exceeds 30 min); Angular with UI state in URL query params | Testability: SQL is checked against the golden values, logic is unit-tested without a DB | SQL Server cannot convert IANA zones natively (resolved by D15) |
+| D14 | Out of scope: auth, alerts, forecasting, visual polish, CI, a week picker in the UI | TICKET.md: alerts, forecasting. Take-home brief: auth, alerts, forecasting, visual polish, production infra (includes CI). Owner decision: UI week picker (the API `week` parameter is in scope, D29) | — |
+| D15 | Week edges: C# converts each account's local Monday 00:00 to UTC with `TimeZoneInfo` (IANA ids) and passes `[start_utc, end_utc)` pairs to SQL as parameters; SQL never converts zones | No dependency on Windows zone names; SQL stays plain range filters | Edge computation lives outside SQL, so the SQL alone can't be run without the C# parameters |
+| D16 | Approved packages; this list is the owner's approval required by CLAUDE.md "Dependencies", so no further confirmation is needed for these. NuGet (8.x): `Microsoft.EntityFrameworkCore.SqlServer`, `Microsoft.EntityFrameworkCore.Design`, `Microsoft.EntityFrameworkCore.Sqlite` (fallback only); `dotnet-ef` 8.x as a local tool (`dotnet new tool-manifest`); the packages the `dotnet new xunit` template creates (`xunit`, `xunit.runner.visualstudio`, `Microsoft.NET.Test.Sdk`, `coverlet.collector`). npm: exactly what `npx @angular/cli@latest new frontend` creates, including its default unit-test setup used by `npx ng test --watch=false`; the Angular major version it installs is recorded under Plan changes. Python (dev-only, outside the app): `tzdata`, for re-running [EVIDENCE.md](EVIDENCE.md) | Approved by the owner | Anything not on this list, including `Microsoft.AspNetCore.Mvc.Testing`, still needs approval |
+| D17 | D6 precedence: Below/Above are tested before Low volume | Owner choice | A location with m<5 can show Above (6/Site M, 6/Site O, [G-04](EVIDENCE.md#g-04)); raised to product as Q9 |
+| D18 | Account id not in `accounts` → 404; existing account with no events (20) → 200 with an empty result | REST semantics: the resource does not exist vs. exists with no data | Two different empty states for the UI |
+| D19 | API unreachable or 5xx → page shows an error message, no numbers, and a Retry button that repeats the same request | Better experience than a dead end | No automatic retry |
+| D20 | Location row order: Below (largest m−v first), then Above (largest v−m first), then Low volume, then Typical; ties by location name. The API returns `locations` already in this order; the UI renders them as received and does not re-sort | Answers "which site do I call first?"; order is testable with `curl` | Above locations are below the fold when there are many Below |
+| D21 | Missed-call baseline uses only baseline weeks with ≥20 known-outcome calls, and needs ≥5 of them; otherwise no rate status, with a reason: `reported_week_too_few_calls` (n of 20) or `baseline_too_few_weeks` (n of 5) | With 5 values P25/P75 fall on the 2nd and 4th sorted values; gives 4 accounts a rate instead of 3 ([G-05](EVIDENCE.md#g-05)) | The baseline describes the busier weeks only |
+| D22 | Location list = every (account_id, location) with any event whose `occurred_at` is before the reported week's `endUtc`; locations with 0 in all 9 weeks still appear with 0. A location first seen after the configured "now" is not listed. With the default clock this is every location in the data ([E-01](EVIDENCE.md#e-01): no event is after the default "now") | Don't hide locations; don't show locations from the future of the configured "now" (O13 option a) | Closed sites would stay listed (none in the seed, [E-10](EVIDENCE.md#e-10)) |
+| D23 | All thresholds live in a `StatusThresholds` record bound from `appsettings.json` (`StatusRules` section) via `IOptions`, validated at startup, passed into the pure `BaselineEvaluator`, and echoed in the API response. Defaults: baseline weeks 8, min gap 3, relative gap 0.3, low-volume median 5, min known calls 20, rate gap 10 pp, min rate baseline weeks 5 | Thresholds tunable without code changes; UI can explain a status | Global only: no per-account overrides (needs auth, deferred) |
+| D24 | API response follows the contract in §12 | One shape for backend and frontend (owner chose the O9 draft) | Changing a field later means changing both sides |
+| D25 | When both D21 checks fail, `reasons` lists both: `reported_week_too_few_calls` first, then `baseline_too_few_weeks`. E.g. account 3: 14 known calls, 0 qualifying baseline weeks ([G-05](EVIDENCE.md#g-05)) | Shows every reason (O10 option c) | A longer message in the UI |
+| D26 | Missed-call rate status uses the count labels `below`/`above`/`typical`; the UI text names the metric, e.g. "Missed-call rate above typical" | One status vocabulary (O11 option a) | The label doesn't say whether above is good or bad |
+| D27 | If fewer than 8 complete baseline weeks exist before the reported week (reached by requesting an early week with `?week=` (D29), e.g. account 1 `2026-03-02` has 4 of 8 ([G-08](EVIDENCE.md#g-08)), or by setting `Clock:NowUtc` early; an account's first complete week is 2026-02-02 or 2026-02-09, [G-07](EVIDENCE.md#g-07)), return 200 with values; `median`/`p25`/`p75`/`status` are `null` and `reasons` holds `insufficient_history` (n of 8) | Shows numbers without a status that has no basis (O12 option a) | No status at all for early weeks |
+| D28 | Seeding: at startup, only when `app.Environment.IsDevelopment()`: run `Database.MigrateAsync()`, then, if `accounts` is empty, read `seed.sql` (repo root) and run it with `ExecuteSqlRawAsync` inside one transaction. Outside Development nothing is migrated or seeded at startup; the schema comes from `dotnet ef database update` (CLAUDE.md "Commands"). Running it again is a no-op because of the empty-`accounts` guard | `seed.sql` stays untouched and is the only copy of the data; no manual step (O14 option a). The guard is required: the seed inserts fixed ids, so a second run would fail on duplicate primary keys | Startup in Development is slower on the first run; EF Core 9 `UseSeeding` would fit but D16 pins EF Core 8 |
+| D30 | D27 also applies to the missed-call rate: with fewer than `baselineWeeks` complete baseline weeks, `missedCallRate` gets `insufficient_history` (n of 8) and null `value`/`median`/`p25`/`p75`/`status`. Reasons are listed in this order: `reported_week_too_few_calls`, `baseline_too_few_weeks`, `insufficient_history` | No status without a full baseline, the same rule as counts (owner choice, raised during S4). Real case: account 1 `?week=2026-03-23` has 7 of 8 baseline weeks | A rate that D21 alone would allow is hidden for early weeks |
+| D29 | Optional query parameter `week` (local Monday, `YYYY-MM-DD`) on `GET /api/accounts/{id}/weekly-status`. Not provided → default week (D2). Not a valid date or not a Monday → 400. Before the account's first complete week, or after its last complete week before "now" → 400. Fewer than 8 complete baseline weeks → 200 with D27 behaviour. An account with no complete weeks (account 20) → any valid Monday returns 200 with the empty result (D11) and `availableWeeks: null`. The response echoes the reported week and adds `availableWeeks: { earliest, latest }`. Bounds in the seed: earliest 2026-02-02 or 2026-02-09, latest 2026-07-20 [G-07](EVIDENCE.md#g-07) | Owner choice (option b): earlier weeks are reachable through the API, and golden values can be requested by week instead of depending on the clock | No UI to pick a week (D14); weeks whose baseline crosses the 2026-03-08 DST change become reachable, so they need tests ([G-08](EVIDENCE.md#g-08), [G-09](EVIDENCE.md#g-09)) |
+
+## 5. Brief
+**Goal:** one API call and one page. For an account and its reported week, show each location's total versus its baseline median and P25–P75 range, with a status. Show account-level statuses for the total, each event type, and the missed-call rate.
+
+**Constraints:** D1–D29. Only the packages approved in D16; anything else needs approval (CLAUDE.md). `seed.sql` and `schema.sql` are untouched.
+
+**Edge cases mapped to this data**
+| Case | In this data | Required behaviour (testable) |
+|---|---|---|
+| Empty | Account 20, 0 events ([E-19](EVIDENCE.md#e-19)) | `GET` returns 200 with `locations: []` and no statuses; UI shows "No activity recorded" |
+| Empty location-week | 4 location-weeks with 0 ([E-13](EVIDENCE.md#e-13)); none in week 2026-07-20 ([E-13](EVIDENCE.md#e-13)) | A 0 counts as a baseline value; a location with 0 in the reported week is listed with `total: 0` |
+| One | Single-location accounts 8, 13, 16, 19 ([E-08](EVIDENCE.md#e-08)) | Response has exactly 1 location row; account status is still computed |
+| Many | Account 6, 15 locations ([E-08](EVIDENCE.md#e-08)) | Response has 15 location rows, one SQL round trip for counts |
+| Enormous | Account 6 week 2026-06-01: 881 events ([E-12](EVIDENCE.md#e-12)) | Inside the baseline for week 2026-07-20; median and P25/P75 for account 6 Site C equal §6(b) |
+| Duplicate | 12 pairs ([E-18](EVIDENCE.md#e-18)); account 1 Site C week 2026-07-06: raw 5 → 4 [G-03](EVIDENCE.md#g-03) | All counts read the dedup view; the baseline value for that week is 4 |
+| Malformed | 240 calls with NULL outcome ([E-16](EVIDENCE.md#e-16)); missed calls with durations ([E-17](EVIDENCE.md#e-17)) | NULLs are counted in `unknownOutcomeCalls` and excluded from the rate; duration never read. Non-integer account id → 400 (model binding) |
+| Unauthorised | Auth out of scope (D14) | Any caller can read any account; documented in README as a known gap |
+| Offline | API unreachable from Angular | D19: error message, no numbers, Retry button; with the API stopped, Retry repeats `GET /api/accounts/{id}/weekly-status` once per click |
+| Concurrent | Read-only endpoint; the API restarts many times in Development | D28: starting the API twice in Development leaves 20 accounts and 12,626 events; the second start does not insert |
+| Unknown account | id not in `accounts` (e.g. 999) | D18: 404; UI shows "Account not found" |
+| Sparse calls | Account 5: 18 known calls in week 2026-07-20; account 2: 3 qualifying baseline weeks ([G-05](EVIDENCE.md#g-05)) | D21: no rate status; reason `reported_week_too_few_calls` (18 of 20) for account 5, `baseline_too_few_weeks` (3 of 5) for account 2 |
+| Requested week | `?week=` values ([G-07](EVIDENCE.md#g-07), [G-08](EVIDENCE.md#g-08)) | D29: no `week` → same response as `?week=2026-07-20` with the default clock; account 20 `?week=2026-07-20` → 200, `locations: []`, `availableWeeks: null`; `2026-07-21` (Tuesday) → 400; `2026-07-27` (partial) → 400; `2026-01-26` (before first complete week) → 400; account 1 `2026-03-02` → 200, total 51, statuses `null`, reason `insufficient_history` 4 of 8 |
+| Bad config | `StatusRules` value out of range | D23: app refuses to start, naming the setting (relative gap outside 0–1, baseline weeks < 4, min rate baseline weeks > baseline weeks) |
+
+**The check:** API output equals §6: account 1 counts (a) and missed-call rate (c), account 6 Site C (b), and account 1 `?week=2026-03-30` (d). Unit tests on the baseline class pass with §6(b), §6(c), §6(d) and the §10 vectors. The §5 edge cases hold. The page at `?account=6` lists 15 locations in D20 order, each with value, range and status.
+
+## 6. Golden values for tests (dedup applied; raw = dedup in both cases)
+[G-01](EVIDENCE.md#g-01) **(a) Account 1 (America/Chicago), week 2026-07-20 = [2026-07-20 05:00, 2026-07-27 05:00) UTC:**
+calls **34**, leads **12**, appointments **7**, total **53**.
+
+[G-02](EVIDENCE.md#g-02) **(b) Account 6 (America/New_York), Site C, all activity, week 2026-07-20 = [07-20 04:00, 07-27 04:00) UTC:**
+- value **6**
+- baseline weeks 2026-05-25 → 2026-07-13, oldest to newest: **4, 67, 11, 3, 6, 6, 8, 3**
+- median **6.0**, P25 **3.75**, P75 **8.75**, threshold max(3, 0.3·6) = 3
+- status **Typical**: 6 is not below 3.75 and not above 8.75, and m ≥ 5
+
+[G-06](EVIDENCE.md#g-06) **(c) Account 1, missed-call rate, week 2026-07-20:**
+- reported week: 32 known-outcome calls, 8 missed, 2 unknown → value **25.0%**
+- baseline rates (percent), all 8 weeks qualify: 20.0, 36.36, 28.12, 35.48, 8.0, 27.03, 22.73, 17.86
+- median **24.8771**, P25 **19.4643**, P75 **29.9647**; status **typical** (inside the range and 0.12 pp from the median)
+
+[G-09](EVIDENCE.md#g-09) **(d) Account 1, total, `?week=2026-03-30` (baseline crosses the 2026-03-08 DST change):**
+- value **61**; baseline 2026-02-02 → 2026-03-23, oldest to newest: **43, 51, 40, 50, 51, 52, 36, 45**
+- median **47.5**, P25 **42.25**, P75 **51.0**, gap threshold max(3, 0.3·47.5) = **14.25**
+- status **typical**: 61 > P75 but 61 − 47.5 = 13.5 < 14.25
+
+Queries and outputs: [G-01](EVIDENCE.md#g-01), [G-02](EVIDENCE.md#g-02), [G-06](EVIDENCE.md#g-06), [G-09](EVIDENCE.md#g-09). (a)–(c) use fixed summer UTC offsets, which are exact because all their weeks (from 2026-05-25) are after the 2026-03-08 DST change ([E-06](EVIDENCE.md#e-06)). (d) spans the DST change, so its week edges come from IANA zones via `tzdata` (D16).
+
+## 7. Implementation slices (total 6 h 00 min, including S2b and S8, which the owner added; budgets rebalanced by the owner on 2026-10-03, see Plan changes)
+Important consideration: run all available test after implementation of each slice.
+| # | Built | Done when | Budget |
+|---|---|---|---|
+| S0 | Layout from CLAUDE.md "Applications": `backend/global.json` pinning SDK `8.0.131` with `rollForward: latestFeature`; `backend/Relay.sln` with `backend/Relay.Api` (.NET 8 Web API) and `backend/Relay.Api.Tests` (xUnit), both `net8.0`; `frontend/` (Angular). D16 packages only | `dotnet --version` in `backend/` prints 8.0.x; both `.csproj` files contain `<TargetFramework>net8.0</TargetFramework>`; `dotnet build` and `dotnet test` (0 tests) in `backend/` succeed; `npx ng version` in `frontend/` runs | 15 min |
+| S1 | `docker-compose.yml` at repo root with one SQL Server 2022 container on port 1433 (dev-only SA password, also in `backend/Relay.Api/appsettings.Development.json`); EF Core migration for both tables and view `activity_events_dedup`. Type mapping from `schema.sql`: `TIMESTAMP` → `datetime2(0)` (on SQL Server `TIMESTAMP` means `rowversion`, so seed inserts would fail; values have second precision, [E-01](EVIDENCE.md#e-01)); `VARCHAR(n)` → `varchar(n)`; `INTEGER` → `int`; no identity on `id` (seed supplies ids) | `docker compose up -d`, then `dotnet ef database update --project backend/Relay.Api` succeeds (CLAUDE.md "Commands"); if the container isn't serving within 30 min, switch to SQLite and record it under Plan changes | 35 min |
+| S2 | Development-only startup seeding (D28). Seed file path from config `Seed:Path`, default `../../seed.sql` resolved against the content root (repo root); S2b overrides it in the container | Start the API twice with `ASPNETCORE_ENVIRONMENT=Development` → both starts succeed and `SELECT COUNT(*)` gives 20 accounts, 12,626 events, 12,614 rows in the view; on a fresh database, run `dotnet ef database update --project backend/Relay.Api`, then start once with `ASPNETCORE_ENVIRONMENT=Production` → 0 accounts | 25 min |
+| S2b | Full stack in one command. `backend/Relay.Api/Dockerfile` (sdk:8.0 build → aspnet:8.0, port 8080) and `frontend/Dockerfile` (node:24-alpine `ng build` → nginx:alpine), each with a `.dockerignore`. `frontend/nginx.conf` proxies `/api/` to `api:8080` and falls back to `index.html` for SPA routes. `frontend/proxy.conf.json` (wired in `angular.json`) sends `/api` to `http://localhost:5038` for `ng serve`, so the SPA always calls relative `/api/...` and the API needs no CORS. `docker-compose.yml` gains `api` (Development, connection string to `sqlserver`, `Seed__Path=/seed/seed.sql`, `./seed.sql` mounted read-only, waits for a healthy `sqlserver`, port 8080) and `frontend` (port 4200→80). `GET /api/health` via the built-in `AddHealthChecks`. CLAUDE.md "Database" becomes `docker compose up -d sqlserver`, plus a full-stack line; README gets a "Run everything with Docker" section | `docker compose down -v`, then `docker compose up -d --build` → `sqlserver` healthy, `api` and `frontend` running; DB has 20 accounts, 12,626 events, 12,614 view rows ([G-03](EVIDENCE.md#g-03)); `curl :8080/api/health` and `curl :4200/api/health` → `Healthy`; `:4200/` and `:4200/anything?account=6` return `index.html`; `docker compose restart api` leaves the counts unchanged; host dev (`docker compose up -d sqlserver`, `dotnet run`, `npx ng serve`) still reaches `/api/health` through the proxy; `dotnet test` and `npx ng test --watch=false` pass | 30 min |
+| S3 | `TimeProvider` registration (config `Clock:NowUtc`, default = MAX(occurred_at)); week calculator: IANA zone + optional requested week (D29) → `[start_utc, end_utc)` for the reported week and its 8 baseline weeks (D15) | Unit tests: now 2026-07-27 22:20:34 → reported week 2026-07-20 for all 19 accounts; account 18 edges 2026-07-20 00:00/07-27 00:00 UTC, account 1 05:00/05:00 ([E-22](EVIDENCE.md#e-22)); account 1 week 2026-03-02 (DST) edges 2026-03-02 06:00 → 2026-03-09 05:00 UTC [G-08](EVIDENCE.md#g-08) | 30 min |
+| S4 | Pure `BaselineEvaluator`: PERCENTILE.INC, D6 + D17 order, D7 + D21 reasons; `StatusThresholds` options with startup validation (D23) | Unit tests pass for §6(b), §6(c), §6(d) and every row in §10; account 3's rate inputs (14 known calls, 0 qualifying weeks) give both D25 reasons in order; with min gap set to 4, 1/Site C (v=9, m=5.5) becomes Typical; relative gap 1.5 in config → startup fails naming `StatusRules:RelativeGap` | 50 min |
+| S5 | Explicit SQL weekly counts (9 weeks × location × type, zero-filled, D22 location list, UTC edge parameters from D15) + `GET /api/accounts/{id}/weekly-status` returning active thresholds; `week` parameter with validation and `availableWeeks` (D29) | `curl` for account 1 returns 34/12/7/53 and missed-call rate 25.0, typical (§6(c)); account 6 `locations` are in D20 order; account 6 Site C returns value 6, range 3.75–8.75, Typical; account 20 returns 200 with `[]`; account 999 returns 404; account 5 returns rate reason `reported_week_too_few_calls`; `?week=2026-07-20` returns the same body as no `week`; account 1 `?week=2026-03-30` returns total 61, median 47.5, range 42.25–51.0, typical (§6(d)); the Requested week edge cases in §5 hold | 65 min |
+| S6 | Angular page: account from `?account=`, table of locations in D20 order (value, range, status, per-type counts), account summary row with rate reasons, error state with Retry (D19), not-found state (D18) | Load `?account=6` → 15 rows, Below rows first; reload keeps the account; account 20 shows the empty message; account 999 shows "Account not found"; API stopped → error + Retry | 55 min |
+| S7 | README: run steps, assumptions (§3), known gaps | Following the README on a clean clone reaches S6's result | 15 min |
+| S8 | **Integration tests with Testcontainers**, details in §7.1. New xUnit project `backend/Relay.Api.IntegrationTests` (`net8.0`, in `Relay.sln`, references `Relay.Api`). It runs the real API in-process (`WebApplicationFactory<Program>`) against a throwaway SQL Server 2022 container started once per test run. The S5 `curl` checks and the S2 seeding checks become automated tests asserting the §5/§6 golden values | All §7.1 tests are shown failing first (stub-first: the fixture throws until it is implemented), then passing. `dotnet test Relay.Api.Tests` runs without Docker; `dotnet test` in `backend/` runs both projects with Docker, and the summary lines of both projects are pasted. The compose DB on port 1433 is unaffected. CLAUDE.md and README are updated | 40 min |
+
+### 7.1 S8 details
+
+**Packages and images** (approved by the owner per library, 2026-10-03):
+- `Testcontainers.MsSql` 4.x, which brings `Testcontainers`.
+- `Microsoft.AspNetCore.Mvc.Testing` 8.0.31.
+- The xUnit template packages (as in `Relay.Api.Tests`).
+- Images: `testcontainers/ryuk` (Testcontainers' cleanup container) and the already-approved `mcr.microsoft.com/mssql/server:2022-latest`.
+
+**Infrastructure**
+- `SqlServerFixture` (xUnit collection fixture, `IAsyncLifetime`) starts one `MsSqlContainer` per run and disposes it at the end.
+- `RelayApiFactory : WebApplicationFactory<Program>` sets the environment to `Development`, so D28 migrates and seeds. It also sets `ConnectionStrings:Relay` to the container, on a database name chosen per factory, and `Seed:Path` to the repo's `seed.sql`, found by walking up from the test assembly. The `seed.sql` file is read only, never copied or changed.
+- `Program.cs` gains `public partial class Program;` so the factory can reach it. That is the only production-code change.
+
+**Tests**, each asserting values already in this plan:
+- **Seeding (D28, S2):**
+  - A fresh database gives 20 accounts, 12,626 events and 12,614 view rows ([G-03](EVIDENCE.md#g-03)).
+  - Starting a second factory on the same database succeeds and leaves the counts unchanged.
+  - A `Production` start on a migrated, empty database seeds nothing (0 accounts).
+- **Golden values over HTTP:**
+  - §6(a) account 1: 34 / 12 / 7 / 53.
+  - §6(c) account 1 rate: 25.0, median 24.8771, range 19.4643–29.9647, typical.
+  - §6(b) account 6 Site C: 6, range 3.75–8.75, typical.
+  - §6(d) account 1 `?week=2026-03-30`: 61, 47.5, 42.25–51.0, typical (DST, IANA zones on Linux).
+- **Rules across the whole dataset**, week 2026-07-20, every account:
+  - Location statuses total typical 40, above 15, below 8, low volume 6 ([G-04](EVIDENCE.md#g-04)).
+  - Only accounts 1, 4, 6 and 12 get a missed-call status (C2, [G-05](EVIDENCE.md#g-05)).
+- **SQL details:**
+  - Dedup: account 1 Site C, week 2026-07-06 counts 4, not 5 ([G-03](EVIDENCE.md#g-03)).
+  - Zero-filled location: account 6 Site G, week 2026-04-13 is listed with 0 ([E-13](EVIDENCE.md#e-13)).
+  - Account 6 returns 15 locations in D20 order.
+- **§5 edge cases:**
+  - Account 20: 200, `locations: []`, `availableWeeks: null`.
+  - 999: 404. `abc`: 400.
+  - Account 5: reason `reported_week_too_few_calls` 18 of 20.
+  - `?week=2026-07-20` gives the same body as no `week`.
+  - `2026-07-21`, `2026-07-27` and `2026-01-26`: 400.
+  - Account 1 `?week=2026-03-02`: 51, `insufficient_history` 4 of 8.
+- **Configuration:**
+  - `StatusRules:RelativeGap=1.5` makes the factory fail to start, with a message naming the key (D23).
+  - `Clock:NowUtc=2026-04-01T00:00:00Z` moves the default reported week to 2026-03-23 for account 1 (D1, D2).
+
+**Commands:** CLAUDE.md "Backend tests" becomes `dotnet test Relay.Api.Tests` (unit tests, no Docker) plus `dotnet test` (unit and integration, needs Docker). Slices run the full command.
+
+## 8. Deferred
+- Auth, alerts/notifications, forecasting, CI, visual polish, UI week picker: out of scope (D14; sources per item are listed in D14).
+- Previous/next week links in the UI (option c of the week evaluation): not chosen; the API `week` parameter (D29) makes them a UI-only addition later.
+- Per-type status at location grain: 85% of those cells are <5 ([E-11](EVIDENCE.md#e-11)).
+- Call duration metrics: duration does not depend on outcome ([E-17](EVIDENCE.md#e-17)).
+- Hour-of-day views: the UTC hour profile is the same in every timezone ([E-06](EVIDENCE.md#e-06)), so local hours are not credible.
+- Peer or industry comparison: the ticket says "typical for them".
+- Per-account threshold overrides: need storage and an admin screen, which needs auth (D14).
+- Thresholds in URL query parameters: rejected; any link viewer could change what "Below" means.
+- Volume-scaled gap (k·√m): pending product answer to Q10 (C5).
+- Combined status "Above · Low volume": pending product answer to Q9.
+
+## 9. Challenges (decisions kept; evidence for review)
+- **C1, D6 flags a third of locations.** In week 2026-07-20, D6 gives 15 Above, 8 Below, 6 Low volume and 40 Typical out of 69 locations [G-04](EVIDENCE.md#g-04). Above flags fire on gaps as small as 3 events (e.g. 1/Site C: 9 vs median 5.5). "Which site to call first" may get lost among 23 flags.
+- **C2, D7 rarely produces a rate.** Only 5 of 19 accounts have ≥20 known-outcome calls in week 2026-07-20. 11 of 19 have 0 qualifying baseline weeks, and only 3 have all 8 [G-05](EVIDENCE.md#g-05). Most accounts get no missed-call status. With D21 (≥5 qualifying weeks), accounts 1, 4, 6 and 12 get a rate, so 15 of 19 still don't; D21 makes the reason visible instead of a blank.
+- **C3, account-level appointment status is mostly Low volume.** 14 of 19 accounts are Low volume for appointments in week 2026-07-20 [G-05](EVIDENCE.md#g-05) ([E-11](EVIDENCE.md#e-11): mean 3.8 appointments per account-week).
+- **C4, the D6 order is ambiguous.** Low volume is listed after Below/Above. For 6/Site M (v=7, m=3.5) and 6/Site O (v=8, m=4.5), Above-first gives "Above" and Low-first gives "Low volume" [G-04](EVIDENCE.md#g-04). Resolved by D17 (Above-first); raised to product as Q9.
+- **C5, the fixed gap max(3, 0.3m) ignores natural variation at low volume.** A gap that scales with volume, |v−m| ≥ 2·√m, would make 1/Site C Typical (2·√5.5 ≈ 4.7 > gap 3.5) and 6/Site M Typical (2·√3.5 ≈ 3.7 > gap 3.5), using the [G-04](EVIDENCE.md#g-04) values. Its effect on all 69 locations has not been queried. Raised to product as Q10; D23 makes the current values tunable meanwhile.
+
+## 10. Extra test vectors (rule D6; dedup; week 2026-07-20; baseline sorted; source [G-04](EVIDENCE.md#g-04))
+| Location | v | Baseline (sorted) | Status |
+|---|---|---|---|
+| 1 / Site C | 9 | 4,4,5,5,6,8,8,11 | Above |
+| 5 / Site B | 3 | 3,4,6,6,7,10,11,14 | Below |
+| 8 / Site A | 7 | 8,8,10,10,10,11,12,13 | Below |
+| 18 / Site A | 3 | 1,2,2,3,4,5,7,8 | Low volume |
+| 6 / Site M | 7 | 1,2,3,3,4,5,6,50 | Above (D17) |
+
+## 11. Open decisions
+O1–O8 were resolved by the owner: O1 → D15, O2 → D16, O3 → D17 (+ Q9), O4 → D18, O5 → D19, O6 → D20, O7 → D21, O8 → D22. Threshold configurability → D23 (+ Q10, C5).
+
+O9–O13 were resolved by the owner (recommended options): O9 → D24, O10 → D25, O11 → D26, O12 → D27, O13 → D22 (upper bound).
+
+O14 was resolved by the owner (option a, Development-only startup seeding) → D28; it replaces D13's "separate idempotent seed step".
+
+Week selection was re-evaluated after confirming that only the owner's decision 14 (not TICKET.md, PRODUCT_BACKGROUND.md or the brief) excluded it: owner chose an API `week` parameter with a default (option b) → D29; the UI week picker stays out of scope (D14).
+
+During S4: does D27 apply to the missed-call rate? The owner chose yes → D30.
+
+No open decisions remain.
+
+## 12. API response contract (D24)
+  ```json
+  { "accountId": 6, "accountName": "…", "timezone": "America/New_York",
+    "reportedWeek": { "localStart": "2026-07-20", "startUtc": "2026-07-20T04:00:00Z", "endUtc": "2026-07-27T04:00:00Z" },
+    "baselineWeeks": ["2026-05-25", "…", "2026-07-13"],
+    "availableWeeks": { "earliest": "2026-02-02", "latest": "2026-07-20" },
+    "thresholds": { "baselineWeeks": 8, "minGap": 3, "relativeGap": 0.3, "lowVolumeMedian": 5,
+                    "minKnownCalls": 20, "rateGapPp": 10, "minRateBaselineWeeks": 5 },
+    "account": {
+      "total":  { "value": 0, "median": 0, "p25": 0, "p75": 0, "status": "typical" },
+      "byType": { "call_received": { "value": 0, "median": 0, "p25": 0, "p75": 0, "status": "typical" }, "lead_created": {}, "appointment_set": {} },
+      "missedCallRate": { "value": 0.0, "median": 0.0, "p25": 0.0, "p75": 0.0, "status": "typical",
+                          "knownOutcomeCalls": 0, "unknownOutcomeCalls": 0, "reasons": [] } },
+    "locations": [ { "location": "Site C", "total": { "value": 6, "median": 6.0, "p25": 3.75, "p75": 8.75, "status": "typical" },
+                     "byType": { "call_received": 0, "lead_created": 0, "appointment_set": 0 } } ] }
+  ```
+  - Status values (counts and missed-call rate, D26): `below`, `above`, `low_volume`, `typical`.
+  - The zeros are placeholders, not expected values; the only expected values are in §6 and §10.
+  - Account 20: same shape, `locations: []`, `account` statuses `null`, `availableWeeks: null`, with or without `week` (D29).
+  - In `missedCallRate`, `value`/`median`/`p25`/`p75`/`status` are `null` when `reasons` is not empty (D21, D25).
+  - Every count status object (`total`, `byType` entries) also carries `reasons: []`; with `insufficient_history` (D27), `median`/`p25`/`p75`/`status` are `null` and `value` is still filled.
+  - Each reason is an object `{ "code": "...", "actual": n, "required": n }`. Codes: `reported_week_too_few_calls` (known-outcome calls in the reported week vs `minKnownCalls`), `baseline_too_few_weeks` (qualifying baseline weeks vs `minRateBaselineWeeks`), `insufficient_history` (complete baseline weeks vs `baselineWeeks`). Example, account 5: `{ "code": "reported_week_too_few_calls", "actual": 18, "required": 20 }` ([G-05](EVIDENCE.md#g-05)); the UI shows "18 of 20".
+  - `locations` is in D20 order.
+  - `reportedWeek` is the requested `week` (D29) or the default week (D2). `availableWeeks` in the example is account 6's real range [G-07](EVIDENCE.md#g-07): earliest = first complete week, latest = last complete week before "now".
+
+## Plan changes
+<!-- Changes made after coding starts: date, what changed, why. -->
+- **2026-10-02, S0, packages.** The owner approved `Swashbuckle.AspNetCore` 6.6.2 and `Microsoft.AspNetCore.OpenApi` 8.0.31, which the default `dotnet new webapi` template adds. These are additions to D16. The owner also asked to be consulted for each library from now on, including those already listed in D16. xUnit template versions: `Microsoft.NET.Test.Sdk` 17.6.0, `xunit` 2.4.2, `xunit.runner.visualstudio` 2.4.5, `coverlet.collector` 6.0.0.
+- **2026-10-02, S0, Angular version.** `npx @angular/cli@latest new frontend --routing --style=css --ssr=false --skip-git --ai-config=none --defaults` installed **Angular 22.2.1** (TypeScript 6.0.3). Its default unit-test runner is **Vitest** 5.0.3 with jsdom, so `npx ng test --watch=false` runs Vitest, not Karma.
+- **2026-10-02, S0, placeholder test.** Removed the template's empty `UnitTest1.cs` so that `dotnet test` runs 0 tests, as the S0 "Done when" requires.
+- **2026-10-02, S1, packages.** Approved by the owner per library. `Microsoft.EntityFrameworkCore.SqlServer` and `Microsoft.EntityFrameworkCore.Design` are **8.0.31**. Image: `mcr.microsoft.com/mssql/server:2022-latest`.
+- **2026-10-02, S1, schema details.** The FK `activity_events.account_id → accounts.id` uses `ON DELETE NO ACTION`, as in schema.sql, which has no cascade. EF adds the index `IX_activity_events_account_id`. The view `activity_events_dedup` returns only the D8 key columns, with no `id`. The SA password is `Relay_Dev_Pass1!`, a dev-only value in `docker-compose.yml` and `appsettings.Development.json`. There is no connection string in `appsettings.json`, so outside Development it must be supplied (for example with the environment variable `ConnectionStrings__Relay`). Without it, the first use of `RelayDbContext` throws an error naming `ConnectionStrings:Relay`.
+- **2026-10-02, S1, extra check.** `seed.sql`, unchanged, loads into the migrated schema: 20 accounts, 12,626 events and 12,614 view rows, which matches [G-03](EVIDENCE.md#g-03). This was checked in a throwaway database that was then dropped; `Relay` stays empty for S2.
+- **2026-10-02, S1, `dotnet-ef` is a global prerequisite (replaces the local tool in D16).** Owner decision: no `dotnet-tools.json` manifest, so a fresh clone doesn't need an extra `dotnet tool restore` step. `dotnet-ef` (8.0 or later) is listed as a global tool under README "Prerequisites".
+- **2026-10-02, new slice S2b (full stack in Docker Compose).** Owner decisions:
+  - It runs right after S2, so the containerised API migrates and seeds at startup (D28).
+  - `docker compose up -d --build` starts all services; host development starts only the DB with `docker compose up -d sqlserver`, and CLAUDE.md "Database" changes to that.
+  - The frontend is served by nginx, which proxies `/api`, so there is no CORS.
+  - Images approved per library: `mcr.microsoft.com/dotnet/sdk:8.0`, `mcr.microsoft.com/dotnet/aspnet:8.0`, `node:24-alpine`, `nginx:alpine`.
+  - No new NuGet or npm packages. S2 gains the `Seed:Path` setting that S2b needs.
+- **2026-10-02, S2, implementation details.**
+  - `DevelopmentSeeder` runs from `Program.cs` before the app starts, only when `IsDevelopment()`. `SeedOptions` (section `Seed`) resolves `Path` against the content root; an absolute path is used as-is. A missing seed file stops startup with an error naming `Seed:Path`.
+  - The seed runs as one `ExecuteSqlRawAsync` batch in one transaction, with a 5-minute command timeout instead of the default 30 s. `seed.sql` has no `GO` separators and no `{}` braces, so EF's raw-SQL formatting doesn't alter it.
+  - `appsettings.Development.json` sets `Microsoft.EntityFrameworkCore.Database.Command` to `Warning`. At Information level, EF logs the full 2.4 MB seed batch on the first start; this also hides SQL command logs in Development (turn it back to `Information` to debug SQL).
+  - Verified beyond the "Done when": starting with no `Relay` database at all creates it, migrates and seeds (20 / 12,626 / 12,614), and the next start skips both.
+- **2026-10-02, S2b, implementation details.**
+  - Containers are `relay-sqlserver`, `relay-api` and `relay-frontend`. The API image runs as the base image's non-root user and does not include `Relay.Api.Tests` (`backend/.dockerignore`).
+  - `GET /api/health` (built-in `AddHealthChecks`) has no unit test: an in-process HTTP test would need `Microsoft.AspNetCore.Mvc.Testing`, which is not approved (D16). It is checked with `curl` instead, directly and through both proxies.
+  - `UseHttpsRedirection` stays; in the container no HTTPS port is configured, so it does not redirect.
+- **2026-10-02, S3, implementation details.**
+  - `WeekCalculator` (`Reporting/`) is static and pure. `ForReport(zone, now, requestedWeek, baselineWeeks)` returns the reported week and its baseline weeks, oldest first. A requested week that isn't a Monday throws `ArgumentException` (S5 maps it to 400); bounds checks (D29) need the data and stay in S5. The baseline size is a parameter until S4 adds `StatusThresholds`.
+  - The clock is fixed for the app's lifetime. If `Clock:NowUtc` is set, that value is used; a value without an offset is read as UTC. Otherwise "now" is `MAX(occurred_at)`, read once at startup after seeding, and logged as `Clock: now = …`. With no events at all, the system clock is used. An invalid `Clock:NowUtc` stops startup with an error naming the setting. Because the clock is resolved at startup, the API now needs the database reachable when it starts, in every environment.
+  - Removed the template's `/weatherforecast` endpoint: it called `DateTime.Now`, which D1 forbids. `Relay.Api.http` now calls `/api/health`.
+  - Known limit: local midnight is assumed never to fall in a DST gap. That holds for the seed's zones (E-05: US changes are at 02:00), but would throw for a zone that changes at midnight.
+  - Verified: IANA ids resolve on Windows .NET 8 (unit tests) and in the `aspnet:8.0` container (zone files for all six seed zones are present; the startup log shows `Clock: now = 2026-07-27T22:20:34Z`).
+- **2026-10-02, S3, the D1 clock is a keyed service (owner decision).** `AddReportingClock()` registers it as `AddKeyedSingleton<TimeProvider>("reporting", …)`; reporting code (S5) resolves it with `[FromKeyedServices("reporting")]`.
+  - **Why:** ASP.NET Core 8 auth (cookies, bearer tokens, OAuth), Identity, output and response caching, HTTP logging and SignalR can take a plain `TimeProvider` from DI. With a frozen non-keyed clock, those would compute expiry and timestamps against 2026-07-27 if added later.
+  - **Checked:** log timestamps, the Kestrel `Date` header and request durations use the real clock, both before and after the change. EF Core uses its own internal services.
+  - **Tests:** `ReportingClockRegistrationTests` checks three things: the keyed clock resolves, a plain `TimeProvider` is not the frozen clock, and a framework `TimeProvider.System` registration is left alone. All three failed against the previous non-keyed registration.
+- **2026-10-02, S4, implementation details.**
+  - **New decision:** D30 (D27 also applies to the missed-call rate) was decided by the owner during S4.
+  - **Evaluator:** `BaselineEvaluator` (`Reporting/`) is static and pure. `EvaluateCount(value, baseline, thresholds)` serves location totals and every account-level count (D5 is the caller's choice). `EvaluateMissedCallRate(reported, baseline, thresholds)` takes `WeekCalls(KnownOutcome, Missed, UnknownOutcome)` per week; rates are in percent. Results carry `Value`/`Median`/`P25`/`P75`/`Status`/`Reasons`, following the §12 contract. JSON names and snake_case status values are S5's job.
+  - **Boundaries:** the gap comparisons are inclusive (≥) and the range comparisons strict (`<` P25, `>` P75), as written in D6/D7. 8/Site A (m−v = 3 = gap → Below) and a rate exactly 10 pp from the median (→ flagged) are both tested.
+  - **Thresholds:** `StatusThresholds` defaults are in code and repeated in `appsettings.json` `StatusRules`. `StatusThresholdsValidator` checks:
+    - the three D23 rules (relative gap 0–1, baseline weeks ≥ 4, min rate baseline weeks ≤ baseline weeks);
+    - min gap ≥ 0, low-volume median ≥ 0, min known calls ≥ 1, rate gap 0–100, and min rate baseline weeks ≥ 1.
+
+    Each failure names the key, e.g. `StatusRules:RelativeGap must be between 0 and 1 (was 1.5).`. `ValidateOnStart` stops startup.
+- **2026-10-02, S5, implementation details.**
+  - **Structure:**
+    - Pure and unit-tested: `WeekPlanner` handles D29 validation, `availableWeeks` and D27 baseline filtering; `WeeklyStatusAssembler` handles account sums, statuses and D20 order.
+    - I/O, checked with `curl`: `WeeklyCountsQuery` (ADO.NET, one parameterised SQL command over `activity_events_dedup`) and `WeeklyStatusEndpoint` (minimal API).
+  - **Round trips:** two per request. One EF query loads the account plus `MIN(occurred_at)`; one SQL command returns all location × week counts, zero-filled. Account-level counts are the sums of location rows, which equal direct account counts ([E-22](EVIDENCE.md#e-22)).
+  - **`availableWeeks.earliest`** is the first local week that starts at or after the account's first event, as in G-07. For an account with no complete week yet (none in the seed besides account 20), any valid Monday returns the empty result, as for account 20.
+  - **D20 details:** locations with no status (D27) sort after Typical, by name. Ties use ordinal name order.
+  - **Account 20:** its counts go through the same evaluator, so the "statuses null" in §12 come with `insufficient_history` (0 of 8) on counts. The rate lists all three D30 reasons.
+  - **Errors** are ProblemDetails:
+    - 404 `Account not found`;
+    - 400 `Invalid week`, with a message saying why (format, not a Monday, outside `availableWeeks`);
+    - 400 for a non-integer id, from minimal-API binding (in Development the body includes exception details).
+    - `?week=` (empty) is 400.
+  - **JSON:** status values are snake_case via `JsonStringEnumConverter(SnakeCaseLower)`; `byType` keys are the event type names.
+  - **Week 2026-07-20 for account 6 has no Below location.** S6's "Below rows first" is vacuous there: the first rows are Above (Site M, Site O, then Site A). `?week=2026-04-13` has a Below row (Site G, 0 events, [E-13](EVIDENCE.md#e-13)).
+- **2026-10-02, S6, implementation details.**
+  - **Files:** `src/app/weekly-status/`, with the model typed from §12, `WeeklyStatusService` (relative `/api/...` URL), `WeeklyStatusPage` and pure label helpers. The page is the only route (`''`); any other path redirects to it. The template's placeholder page and title are gone; the page title is "Weekly activity". `provideHttpClient(withFetch())` was added; no new npm packages.
+  - **State:** the account lives only in `?account=`. The page has an "Account id" form that navigates to `?account=n`, so reload and links keep it. Missing account → a prompt; non-numeric → a message. Neither calls the API.
+  - **Views:** loading; loaded (account summary + locations table, rendered in the order received, D20); `locations: []` → "No activity recorded for this account." (D11); 404 → "Account not found." (D18); status 0 or any other error → message with no numbers and a Retry button that repeats the request once per click (D19).
+  - **Text:**
+    - Statuses read "Below typical", "Above typical", "Low volume", "Typical".
+    - The missed-call rate row is labelled "Missed-call rate" (D26).
+    - A missing status shows its reasons as "n of m", e.g. "Too few calls with a known outcome last week (18 of 20)" (D21/D25/D27/D30).
+    - Ranges show "P25–P75 (median m)"; rates use one decimal and %.
+    - The rate note uses singular or plural ("1 call … is not counted", "2 calls … are not counted"). Fixed after the browser check on account 5, with a test.
+  - **Formatting:** `frontend/src` is formatted with the installed Prettier (`.prettierrc` from `ng new`); 8 files changed, and the spec needed a second pass to settle. The reflow split the "Week of …" sentence and added spaces before "," and "." in the rendered text. Tests now pin the exact sentence; it is built in `weekSummary()`, so HTML formatting can't change it. Nothing enforces Prettier yet (README "With more time").
+- **2026-10-03, removed `Microsoft.AspNetCore.OpenApi` (owner decision).**
+  - **Problem:** the Swagger UI showed "Unable to render this definition". `Microsoft.AspNetCore.OpenApi` 8.0.31 pulled in `Microsoft.OpenApi` 1.6.30, which writes `openapi: 3.0.4`. The Swagger UI bundled with Swashbuckle 6.6.2 does not accept that version.
+  - **Fix:** the package was unused after S3 removed `/weatherforecast` (its only use, `.WithOpenApi()`), so it was removed. `Microsoft.OpenApi` now resolves to 1.6.14 via Swashbuckle (`openapi: 3.0.1`).
+  - **Verified:** the UI renders, and "Try it out" for account 1 `?week=2026-03-30` returns 61 / 47.5 / 42.25–51.0 / typical (§6(d)). Backend tests: 115 passed.
+- **2026-10-03, new slice S8: integration tests with Testcontainers (owner decision).** Owner decisions:
+  - **Packages:** all listed in §7.1 are approved. This lifts the D16 exclusion of `Microsoft.AspNetCore.Mvc.Testing`.
+  - **Test commands:** split. `dotnet test Relay.Api.Tests` needs no Docker; the full `dotnet test` needs Docker.
+  - **Red step:** stub-first. The tests are written before the fixture and factory work, so they fail on setup and then pass.
+  - **Motivation:** the SQL aggregation and the endpoint were checked only by hand with `curl` (S5); S8 makes those checks repeatable.
+- **2026-10-03, slice budgets rebalanced to a 6 h 00 total (owner decision).** S0 15, S1 35, S2 25, S2b 30, S3 30, S4 50, S5 65, S6 55, S7 15, S8 40 min. These are budgets, not measured times.
+- **2026-10-03, S8, implementation details.**
+  - **Packages:** `Testcontainers.MsSql` 4.15.0 (the latest 4.x), `Microsoft.AspNetCore.Mvc.Testing` 8.0.31 and the xUnit template packages. Testcontainers also ran `testcontainers/ryuk:0.14.0` for cleanup; it exits after the run, and no containers are left.
+  - **Infrastructure:**
+    - `ApiFixture` is an xUnit collection fixture: one container per run, plus the shared seeded API on database `relay_shared`.
+    - `RelayApiFactory` sets the environment and adds config last, so it wins over `appsettings.{Environment}.json`: connection string, `Seed:Path` and test settings.
+    - `RepoPaths` finds `seed.sql` by walking up from the test binaries.
+  - **Production change:** only `public partial class Program;`. `backend/.dockerignore` also excludes the new project.
+  - **Red → green:**
+    - Stub-first, as the owner chose: with the fixture throwing, `Failed!  - Failed: 24, Passed: 0, Skipped: 0, Total: 24`. Implemented: `Passed!  - Failed: 0, Passed: 24, Skipped: 0, Total: 24`.
+    - These tests covered behaviour that already worked, so they found no new bugs.
+    - The full `dotnet test` takes about 20 s, including the container start.
+  - **D20 check:** the order test checks the D20 property (status rank, then gap, then name) rather than a fixed list, plus `Site M`, `Site O` first (G-04).
+  - **Builder API:** Testcontainers 4.15 marks `new MsSqlBuilder()` obsolete; the fixture uses `new MsSqlBuilder(image)`.
+  - **Checked in the browser against the Docker stack (:4200):**
+    - `?account=6` → 15 rows in the API's order, and a reload keeps the account.
+    - Accounts 20 and 999 through the form → the empty and not-found messages.
+    - API container stopped → nginx answers 502 after about 3 s → error + Retry. API restarted → one Retry click sends one request and loads 15 rows.

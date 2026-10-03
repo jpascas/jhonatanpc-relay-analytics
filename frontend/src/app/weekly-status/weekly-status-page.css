@@ -1,0 +1,51 @@
+:host {
+  display: block;
+  max-width: 64rem;
+  margin: 0 auto;
+  padding: 1rem;
+  font-family: system-ui, sans-serif;
+}
+
+.account-form {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.account-form input {
+  width: 6rem;
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+th,
+td {
+  padding: 0.25rem 0.5rem;
+  border-bottom: 1px solid #ddd;
+  text-align: left;
+}
+
+.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.status-below th[scope='row'] {
+  border-left: 4px solid #c62828;
+}
+
+.status-above th[scope='row'] {
+  border-left: 4px solid #1565c0;
+}
+
+.message.error {
+  color: #b71c1c;
+}
+
+.week,
+.note {
+  color: #555;
+}

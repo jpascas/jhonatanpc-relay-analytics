@@ -1,0 +1,17 @@
+@Relay.Api_HostAddress = http://localhost:5038
+
+GET {{Relay.Api_HostAddress}}/api/health
+
+###
+
+# Default week (last complete week before "now", D2)
+GET {{Relay.Api_HostAddress}}/api/accounts/6/weekly-status
+Accept: application/json
+
+###
+
+# Requested week whose baseline crosses the 2026-03-08 DST change (PLAN §6(d))
+GET {{Relay.Api_HostAddress}}/api/accounts/1/weekly-status?week=2026-03-30
+Accept: application/json
+
+###

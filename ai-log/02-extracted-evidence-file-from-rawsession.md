@@ -1,0 +1,1 @@
+In order for the Plan.md file to be reproducible on a clean context session, i requested to export a EVIDENCE.md file with the information it needs from the data that came from the rawsession (ai-log\00-explore-and-clarify-1-rawsession.md) used to explore and clarify the requirement. And then update the PLAN.MD to reference entries in the EVIDENCE.md only.
